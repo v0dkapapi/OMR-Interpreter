@@ -1,0 +1,38 @@
+# Environments & Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.env
+
+# Datasets and personal data (Strict rule: never commit roster.csv or raw data)
+roster.csv
+data/
+*.csv.bak
+
+# Model weights and checkpoints (preserve directory structure via .gitkeep)
+models/*
+!models/.gitkeep
+*.pt
+*.pth
+*.onnx
+
+# Training and inference cache, temporary uploads, and outputs (preserve structure)
+cache/*
+!cache/.gitkeep
+outputs/*
+!outputs/.gitkeep
+temp_uploads/*
+!temp_uploads/.gitkeep
+
+# Temporary scratch and diagnostic files
+scratch_*.txt
+scratch_*.py
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

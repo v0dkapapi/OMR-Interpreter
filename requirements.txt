@@ -1,0 +1,28 @@
+# Deep learning and computer vision (Apple Silicon MPS / CPU compatible)
+torch==2.15.0
+torchvision==0.29.2
+opencv-python-headless==5.1.0.95
+pillow==13.0.0
+numpy==2.5.5
+transformers==5.23.0
+easyocr==1.7.2
+scipy==1.18.1
+
+# Web backend and API services
+fastapi==0.163.1
+uvicorn[standard]==0.54.0
+python-multipart==0.0.34
+pydantic==2.14.3
+
+# Data analysis, evaluation, and image processing
+pandas==3.1.1
+scikit-learn==1.9.1
+scikit-image==0.26.0
+
+# Configuration, environment, and progress utilities
+python-dotenv==1.2.4
+tqdm==4.70.1
+
+# Testing framework and HTTP clients
+pytest==9.2.0
+httpx==0.28.1

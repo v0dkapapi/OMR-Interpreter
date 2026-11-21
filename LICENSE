@@ -1,0 +1,20 @@
+# Software License Notice
+
+Copyright (c) 2026 OMR Interpreter Project Contributors.
+
+This software is developed for optical mark recognition and deterministic answer sheet grading.
+
+Before publishing or deploying this repository, select and finalize the desired licensing option:
+
+Option A: MIT License (Permissive open-source)
+- Recommended if sharing openly across institutions.
+- SPDX Identifier: MIT
+
+Option B: Apache License 2.0 (Permissive with patent grant)
+- Recommended if formal corporate/institutional IP protection is required.
+- SPDX Identifier: Apache-2.0
+
+Option C: Academic / Proprietary Research License
+- Recommended if internal to an educational institution or restricted evaluation.
+
+Unless modified by repository administrators, this codebase is distributed under the MIT License terms.

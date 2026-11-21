@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OMR Interpreter - Answer Sheet Evaluation Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css?v=2.1">
+</head>
+<body>
+  <!-- Header Bar -->
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand">
+        <div class="brand-badge">OMR</div>
+        <div class="brand-text">
+          <h1>Answer Sheet Interpreter</h1>
+          <p class="subtitle">Optical Mark Recognition and Deterministic Grading System</p>
+        </div>
+      </div>
+      <div class="system-status">
+        <span class="status-indicator"></span>
+        <span id="systemStatusText" class="status-text">System Ready</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="dashboard-container">
+    <!-- Top Grid: Input & Configuration Section -->
+    <section class="config-section" aria-label="Upload and Configuration">
+      <!-- Upload Card -->
+      <div class="card upload-card">
+        <h2 class="card-title">1. Upload Answer Sheet</h2>
+        <p class="card-desc">Select or drop a flatbed scan, phone photo, or high-skew image (JPG, PNG, WEBP, TIFF up to 25 MB).</p>
+        
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload Answer Sheet Dropzone">
+          <input type="file" id="imageInput" accept=".jpg,.jpeg,.png,.webp,.bmp,.tiff" class="file-input">
+          <div class="dropzone-content">
+            <div class="dropzone-marker">FILE UPLOAD</div>
+            <p class="dropzone-prompt">Drag and drop answer sheet here, or click to browse</p>
+            <p class="dropzone-hint">Supports high-resolution phone captures and flatbed scans</p>
+          </div>
+          <div id="fileSelectedDisplay" class="file-selected-display hidden">
+            <span class="file-label">Selected file:</span>
+            <span id="selectedFileName" class="file-name"></span>
+            <button type="button" id="clearFileBtn" class="btn-text">Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Configuration Card -->
+      <div class="card settings-card">
+        <h2 class="card-title">2. Answer Key &amp; Scoring Policy</h2>
+        <p class="card-desc">Configure the expected answers and penalty rules.</p>
+        
+        <div class="form-group">
+          <label class="form-label" for="answerKeySelect">Answer Key Source</label>
+          <select id="answerKeySelect" class="form-select">
+            <option value="default">Default S3231 Examination Key (120 Questions)</option>
+            <option value="custom">Upload Custom Answer Key (JSON or CSV)</option>
+          </select>
+        </div>
+
+        <div id="customKeyUploadGroup" class="form-group hidden">
+          <label class="form-label" for="keyFileInput">Upload Custom Key File</label>
+          <input type="file" id="keyFileInput" accept=".json,.csv" class="form-input">
+          <span class="input-hint">Accepted formats: key-value JSON or 2-column CSV (Question, Answer).</span>
+        </div>
+
+        <div class="scoring-grid">
+          <div class="form-group">
+            <label class="form-label" for="marksCorrectInput">Marks Per Correct</label>
+            <input type="number" id="marksCorrectInput" class="form-input" value="1.0" step="0.25" min="0">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="negativeMarksInput">Negative Marking Penalty</label>
+            <input type="number" id="negativeMarksInput" class="form-input" value="0.0" step="0.25" min="0">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="multiMarkInput">Multi-Mark Score</label>
+            <input type="number" id="multiMarkInput" class="form-input" value="0.0" step="0.25" readonly>
+          </div>
+        </div>
+
+        <button id="processBtn" class="btn btn-primary btn-block" disabled>
+          Grade Answer Sheet
+        </button>
+      </div>
+    </section>
+
+    <!-- Loading State Banner -->
+    <div id="loadingState" class="loading-state hidden" role="status" aria-live="polite">
+      <div class="spinner"></div>
+      <div class="loading-text">
+        <h3 id="loadingStageTitle">Processing Sheet...</h3>
+        <p id="loadingStageDesc">Running perspective alignment, shadow normalization, and neural bubble classification.</p>
+      </div>
+    </div>
+
+    <!-- Error State Banner -->
+    <div id="errorState" class="error-banner hidden" role="alert">
+      <div class="error-header">
+        <span class="error-tag">Error</span>
+        <strong id="errorMessageTitle">Processing Failed</strong>
+      </div>
+      <p id="errorMessageDesc" class="error-desc"></p>
+    </div>
+
+    <!-- Results Section (Visible after grading) -->
+    <section id="resultsSection" class="results-section hidden" aria-label="Grading Results">
+      <!-- Score Summary Dashboard Cards -->
+      <div class="summary-grid">
+        <div class="metric-card metric-primary">
+          <span class="metric-label">Marks Obtained</span>
+          <div class="metric-val">
+            <span id="marksObtainedVal">0.00</span>
+            <span class="metric-denom">/ <span id="totalMarksVal">120.00</span></span>
+          </div>
+          <span class="metric-sub">Net Score</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Percentage Score</span>
+          <div class="metric-val">
+            <span id="percentageVal">0.0%</span>
+          </div>
+          <div class="progress-bar-container">
+            <div id="percentageBar" class="progress-bar-fill" style="width: 0%;"></div>
+          </div>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Correct Answers</span>
+          <div class="metric-val text-success" id="correctCountVal">0</div>
+          <span class="metric-sub">Single match</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Incorrect Answers</span>
+          <div class="metric-val text-danger" id="incorrectCountVal">0</div>
+          <span class="metric-sub">Wrong option</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Multiple Marks</span>
+          <div class="metric-val text-warning" id="multiMarkCountVal">0</div>
+          <span class="metric-sub">2+ filled (Invalid)</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-label">Unanswered</span>
+          <div class="metric-val text-muted" id="unansweredCountVal">0</div>
+          <span class="metric-sub">Blank bubbles</span>
+        </div>
+      </div>
+
+      <!-- Two-Column Details Row: Student Metadata + Flagged Issues -->
+      <div class="details-row">
+        <!-- Student Details Card -->
+        <div class="card metadata-card">
+          <div class="card-header-flex">
+            <h3 class="card-title">Extracted Student Information</h3>
+            <span id="ocrEngineBadge" class="badge badge-neutral">TrOCR / EasyOCR</span>
+          </div>
+          <div class="student-fields-grid">
+            <div class="field-item">
+              <span class="field-label">Student ID (Roll Number)</span>
+              <div class="field-value-row">
+                <span id="studentIdVal" class="field-val">—</span>
+                <span id="studentIdConf" class="conf-badge">—</span>
+              </div>
+            </div>
+            <div class="field-item">
+              <span class="field-label">Student Name</span>
+              <div class="field-value-row">
+                <span id="studentNameVal" class="field-val">—</span>
+                <span id="studentNameConf" class="conf-badge">—</span>
+              </div>
+            </div>
+            <div class="field-item">
+              <span class="field-label">Module / Exam Code</span>
+              <div class="field-value-row">
+                <span id="moduleCodeVal" class="field-val">—</span>
+                <span id="moduleCodeConf" class="conf-badge">—</span>
+              </div>
+            </div>
+            <div class="field-item">
+              <span class="field-label">Seat Number</span>
+              <div class="field-value-row">
+                <span id="seatNumberVal" class="field-val">—</span>
+                <span id="seatNumberConf" class="conf-badge">—</span>
+              </div>
+            </div>
+            <div class="field-item">
+              <span class="field-label">Examination Date</span>
+              <div class="field-value-row">
+                <span id="examDateVal" class="field-val">—</span>
+                <span id="examDateConf" class="conf-badge">—</span>
+              </div>
+            </div>
+            <div class="field-item">
+              <span class="field-label">Sheet Alignment Confidence</span>
+              <div class="field-value-row">
+                <span id="alignmentConfidenceVal" class="field-val">—</span>
+                <span id="alignmentStatusBadge" class="badge">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Flagged Issues Card -->
+        <div class="card issues-card">
+          <div class="card-header-flex">
+            <h3 class="card-title">Flagged Inspection Issues</h3>
+            <span id="flaggedCountBadge" class="badge badge-alert">0 Issues</span>
+          </div>
+          <div id="flaggedIssuesList" class="issues-list">
+            <div class="empty-issues">No anomalies detected. All markings conform to policy.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Image Preview and Detected Bubbles Overlay -->
+      <div class="card preview-card">
+        <div class="card-header-flex">
+          <div>
+            <h3 class="card-title">Preprocessed Sheet &amp; Bubble Detection Preview</h3>
+            <p class="card-desc">Detected bubbles overlaid on normalized canonical sheet: Red = Flagged / Invalid, Neutral Gray = Conforming.</p>
+          </div>
+          <div class="preview-actions">
+            <button id="togglePreviewZoomBtn" class="btn btn-secondary btn-sm">Zoom View</button>
+          </div>
+        </div>
+        <div class="preview-viewport">
+          <img id="overlayPreviewImage" src="" alt="Overlaid OMR Sheet Preview" class="preview-img">
+        </div>
+      </div>
+
+      <!-- Question-by-Question Table -->
+      <div class="card table-card">
+        <div class="card-header-flex">
+          <div>
+            <h3 class="card-title">Question-by-Question Breakdown</h3>
+            <p class="card-desc">Detailed evaluation across all 120 questions.</p>
+          </div>
+          <div class="export-actions">
+            <button id="exportCsvBtn" class="btn btn-secondary btn-sm">Export CSV</button>
+            <button id="exportJsonBtn" class="btn btn-secondary btn-sm">Export JSON</button>
+          </div>
+        </div>
+
+        <div class="table-container">
+          <table class="results-table" aria-label="Question by Question Evaluation Table">
+            <thead>
+              <tr>
+                <th scope="col">Question</th>
+                <th scope="col">Selected Option(s)</th>
+                <th scope="col">Expected Answer</th>
+                <th scope="col">Status</th>
+                <th scope="col">Marks Awarded</th>
+                <th scope="col">Confidence</th>
+                <th scope="col">Flags</th>
+              </tr>
+            </thead>
+            <tbody id="questionTableBody">
+              <!-- Populated dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modal for Enlarged Preview -->
+  <div id="previewModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Full Size Sheet Preview">
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">Sheet Overlay Full View</h3>
+        <button id="closeModalBtn" class="btn-text">Close</button>
+      </div>
+      <div class="modal-body">
+        <img id="modalPreviewImage" src="" alt="Full Preview" class="modal-img">
+      </div>
+    </div>
+  </div>
+
+  <footer class="app-footer">
+    <div class="footer-container">
+      <p>OMR Interpreter &copy; 2026. Strict White and Red Design System. Zero emojis.</p>
+    </div>
+  </footer>
+
+  <script src="/static/app.js?v=2.1"></script>
+</body>
+</html>

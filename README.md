@@ -40,7 +40,7 @@ Designed for Apple Silicon (macOS) with thermal and memory discipline, zero CUDA
                                   ▼
           [5. FastAPI Backend & Dashboard UI (src/app.py, frontend/)]
             ├── REST Endpoints: /api/grade, /api/results/{id}, /api/export/{id}.csv, /api/export/{id}.json
-            ├── Annotated High-Resolution Sheet Preview Overlay (Red = Flagged, Neutral = OK)
+            ├── Marked Sheet Preview (Green = correct answer, Red = wrong or invalid choice)
             └── Accessible Keyboard-Usable Dashboard (Zero Emojis, Pure White #FFFFFF & Crimson Red)
 ```
 
@@ -123,7 +123,7 @@ python src/evaluate.py --person p04 --condition scan
 Outputs saved:
 - Structured Report: `outputs/evaluation_report.json`
 - Human-Readable Summary Table: `outputs/evaluation_summary.txt`
-- Visual Failure Cases: `outputs/failures/{sheet_id}_overlay.jpg` (detected bubbles overlaid on sheet: flagged in red `#DC2626`, conforming in neutral gray)
+- Visual Failure Cases: `outputs/failures/{sheet_id}_overlay.jpg` (mismatched choices in red `#DC2626`, missed ground-truth answers outlined in green `#16A34A`)
 - Failure Details: `outputs/failures/{sheet_id}_fail.json`
 
 ### D. Batch-Grade a Folder of Sheets
@@ -192,6 +192,7 @@ The dashboard adheres strictly to the project UI guidelines:
   - Background: Pure White (`#FFFFFF`)
   - Primary Red Palette: Deep Crimson (`#7F1D1D`), Dark Red (`#991B1B`), Alert Red (`#B91C1C`), Bright Red (`#DC2626`), Soft Tint (`#FEE2E2`, `#FEF2F2`)
   - Neutral Borders: Neutral Gray (`#E5E7EB`)
+  - Answer Marking (sheet overlay only): Green (`#16A34A`) for correct answers, Bright Red (`#DC2626`) for wrong or invalid choices
   - Primary Dark Text: `#111827`
 - **Accessibility:** Visible focus rings (`2px solid #B91C1C` with `2px` offset) on all interactive elements; full keyboard navigation for the upload dropzone (`tabindex="0"`, `Enter`/`Space`).
 

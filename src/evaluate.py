@@ -81,7 +81,8 @@ def generate_failure_overlay(
 ) -> np.ndarray:
     """Generate annotated failure overlay image.
 
-    Bubbles flagged or mismatched are highlighted in Red (#DC2626: BGR 38, 38, 220).
+    Bubbles flagged or mismatched are highlighted in Red (#DC2626: BGR 38, 38, 220);
+    missed ground-truth answers are outlined in green (#16A34A).
     Conforming bubbles are marked in neutral dark gray (BGR 75, 85, 99) or faint gray.
     Never prints student names.
     """
@@ -113,8 +114,8 @@ def generate_failure_overlay(
                     cv2.circle(overlay, (cx, cy), r - 2, (107, 114, 128), -1)
             else:
                 if is_gt_bubble and is_mismatch:
-                    # Expected bubble that was missed (dashed blue/red outline)
-                    cv2.circle(overlay, (cx, cy), r + 1, (200, 100, 0), 2)
+                    # Ground-truth answer that was missed: green, as in the dashboard
+                    cv2.circle(overlay, (cx, cy), r + 1, (74, 163, 22), 2)
                 elif is_mismatch:
                     # Faint red ring for options of a mismatched question
                     cv2.circle(overlay, (cx, cy), r, (120, 120, 220), 1)

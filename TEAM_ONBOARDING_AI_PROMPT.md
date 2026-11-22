@@ -17,7 +17,7 @@ This project is an Optical Mark Recognition (OMR) system and deterministic gradi
    - 2+ options filled = MULTIPLE_MARK (strictly 0 marks, never single-option attributed).
    - 0 options filled = UNANSWERED (0 marks).
    - Ambiguities & classifier disagreements = REVIEW (must never be silently guessed).
-3. **Zero Emojis:** The codebase and UI strictly adhere to a pure white (#FFFFFF) and crimson red design system. Zero emojis across all code, logs, API responses, and frontend text.
+3. **Zero Emojis:** The codebase and UI strictly adhere to a pure white (#FFFFFF) and crimson red design system; the only exception is green (#16A34A) marking correct answers on the sheet overlay. Zero emojis across all code, logs, API responses, and frontend text.
 4. **No Test Set Leakage:** Contributors `p03`, `p04`, and `p19` are strictly reserved for stress testing and must NEVER be used for training or validation patch extraction.
 
 ### 2. Key Source-of-Truth Files

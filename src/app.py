@@ -162,51 +162,75 @@ def parse_uploaded_answer_key(file_bytes: bytes, filename: str) -> Dict[str, str
         raise HTTPException(status_code=400, detail=f"Invalid CSV answer key: {e}")
 
 
+# Overlay colours (BGR)
+OVERLAY_GREEN = (74, 163, 22)    # #16A34A: correct answer
+OVERLAY_RED = (38, 38, 220)      # #DC2626: chosen answer that is wrong or invalid
+OVERLAY_GRAY = (128, 128, 128)   # chosen answer that could not be graded (no key entry)
+OVERLAY_FAINT = (190, 190, 190)  # every other bubble
+OVERLAY_FILL_ALPHA = 0.55        # translucent fills keep the student's mark visible
+
+
+def render_overlay(
+    canonical_bgr: np.ndarray,
+    grade_result: GradeResult,
+    template: Dict[str, Any]
+) -> np.ndarray:
+    """Draw the marking overlay on the canonical sheet.
+
+    - Correct answer chosen: the chosen bubble is green.
+    - Wrong answer chosen: the chosen bubble is red and the correct answer green.
+    - Multiple marks: each chosen bubble is red; the correct answer is green
+      (an outer green ring if the student also marked it).
+    - Unanswered or under review: the correct answer gets a green outline only,
+      so it is not mistaken for a mark the student made.
+    """
+    bubble_rois = template.get("bubble_rois", {})
+    fills = canonical_bgr.copy()
+    rings: List[tuple] = []   # (center, radius, colour, thickness)
+
+    for q in grade_result.questions:
+        opts = bubble_rois.get(str(q.question))
+        if not opts:
+            continue
+        selected = set(q.selected_options)
+        expected = q.expected_answer if q.expected_answer in opts else None
+        status = q.status
+
+        for opt, roi in opts.items():
+            center = (int(roi["x"] + roi["w"] / 2), int(roi["y"] + roi["h"] / 2))
+            r = int(min(roi["w"], roi["h"]) / 2)
+
+            if opt in selected:
+                if status == QuestionStatus.CORRECT.value:
+                    colour = OVERLAY_GREEN
+                elif status == QuestionStatus.NOT_GRADED.value:
+                    colour = OVERLAY_GRAY
+                else:  # INCORRECT, MULTIPLE_MARK, REVIEW
+                    colour = OVERLAY_RED
+                cv2.circle(fills, center, r - 1, colour, -1)
+                rings.append((center, r + 2, colour, 3))
+                if opt == expected and status != QuestionStatus.CORRECT.value:
+                    rings.append((center, r + 6, OVERLAY_GREEN, 3))
+            elif opt == expected:
+                if status in (QuestionStatus.INCORRECT.value, QuestionStatus.MULTIPLE_MARK.value):
+                    cv2.circle(fills, center, r - 1, OVERLAY_GREEN, -1)
+                rings.append((center, r + 2, OVERLAY_GREEN, 3))
+            else:
+                rings.append((center, r, OVERLAY_FAINT, 1))
+
+    overlay = cv2.addWeighted(fills, OVERLAY_FILL_ALPHA, canonical_bgr, 1.0 - OVERLAY_FILL_ALPHA, 0)
+    for center, radius, colour, thickness in rings:
+        cv2.circle(overlay, center, radius, colour, thickness)
+    return overlay
+
+
 def generate_overlay_preview(
     canonical_bgr: np.ndarray,
     grade_result: GradeResult,
     template: Dict[str, Any]
 ) -> str:
-    """Generate high-resolution annotated overlay image with detected bubbles."""
-    overlay = canonical_bgr.copy()
-    bubble_rois = template.get("bubble_rois", {})
-
-    status_map = {q.question: q for q in grade_result.questions}
-
-    for q_num, opts in bubble_rois.items():
-        q_int = int(q_num)
-        q_res = status_map.get(q_int)
-        is_flagged = q_res and q_res.status in (
-            QuestionStatus.INCORRECT.value,
-            QuestionStatus.MULTIPLE_MARK.value,
-            QuestionStatus.REVIEW.value
-        )
-
-        for opt, roi in opts.items():
-            cx = int(roi["x"] + roi["w"] / 2)
-            cy = int(roi["y"] + roi["h"] / 2)
-            r = int(min(roi["w"], roi["h"]) / 2)
-
-            is_selected = q_res and (opt in q_res.selected_options)
-
-            if is_selected:
-                if is_flagged:
-                    # Red highlight (#DC2626)
-                    cv2.circle(overlay, (cx, cy), r + 2, (38, 38, 220), 3)
-                    cv2.circle(overlay, (cx, cy), r - 1, (38, 38, 220), -1)
-                else:
-                    # Neutral gray highlight for conforming selected bubbles
-                    cv2.circle(overlay, (cx, cy), r + 2, (75, 85, 99), 3)
-                    cv2.circle(overlay, (cx, cy), r - 1, (107, 114, 128), -1)
-            else:
-                if is_flagged:
-                    # Subtly red outline for unselected bubbles of flagged question
-                    cv2.circle(overlay, (cx, cy), r, (120, 120, 220), 1)
-                else:
-                    # Neutral faint gray circle
-                    cv2.circle(overlay, (cx, cy), r, (180, 180, 180), 1)
-
-    # Encode as JPEG
+    """Render the marking overlay and return it as a JPEG data URI."""
+    overlay = render_overlay(canonical_bgr, grade_result, template)
     success, buffer = cv2.imencode(".jpg", overlay, [cv2.IMWRITE_JPEG_QUALITY, 85])
     if not success:
         return ""

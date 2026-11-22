@@ -24,7 +24,6 @@ from contextlib import asynccontextmanager
 
 import cv2
 import numpy as np
-from PIL import Image
 import torch
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, status
 from fastapi.staticfiles import StaticFiles
@@ -39,7 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 import config
 from src.preprocess import SheetPreprocessor, PreprocessResult
-from src.train_bubble_model import build_model, classical_classify_bubble
+from src.fusion import BubbleReader, load_bubble_model
 from src.handwriting_ocr import HandwritingOCR
 from src.grader import OMRGrader, ScoringConfig, GradeResult, QuestionStatus
 
@@ -74,7 +73,7 @@ OVERLAY_IMAGE_CACHE: Dict[str, str] = {} # result_id -> base64 data URI
 # Global components (lazy loaded on startup)
 preprocessor: Optional[SheetPreprocessor] = None
 ocr_engine: Optional[HandwritingOCR] = None
-bubble_model: Optional[torch.nn.Module] = None
+bubble_reader: Optional[BubbleReader] = None
 grader: Optional[OMRGrader] = None
 template_data: Dict[str, Any] = {}
 default_answer_key: Dict[str, str] = {}
@@ -82,7 +81,7 @@ default_answer_key: Dict[str, str] = {}
 
 def load_components():
     """Initialize models and configurations."""
-    global preprocessor, ocr_engine, bubble_model, grader, template_data, default_answer_key
+    global preprocessor, ocr_engine, bubble_reader, grader, template_data, default_answer_key
 
     config.ensure_directories()
 
@@ -101,23 +100,17 @@ def load_components():
     ocr_engine = HandwritingOCR()
     grader = OMRGrader()
 
-    # Load MobileNetV3 model
+    # Load MobileNetV3 bubble classifier (fill-margin-only fallback if weights are absent)
     device = config.get_device()
-    model_path = config.TRAIN_CONFIG["final_model_path"]
-    bubble_model = build_model(num_classes=3, pretrained=False).to(device)
-
-    if model_path.exists():
-        logger.info(f"Loading trained bubble model weights from {model_path}...")
-        try:
-            state_dict = torch.load(model_path, map_location=device)
-            bubble_model.load_state_dict(state_dict)
-            bubble_model.eval()
-            logger.info("MobileNetV3 bubble model loaded successfully.")
-        except Exception as e:
-            logger.warning(f"Could not load model weights: {e}. Falling back to default initialization.")
-    else:
-        logger.warning(f"Model file {model_path} not found. Running with classical baseline.")
-        bubble_model.eval()
+    model = None
+    try:
+        model = load_bubble_model(device)
+    except Exception as e:
+        logger.warning(f"Could not load bubble model weights: {e}. Using classical fill-ratio baseline only.")
+    if model is None:
+        logger.warning("Bubble model weights not available. Running in fill-margin-only mode (no multi-mark detection).")
+    bubble_reader = BubbleReader(template_data.get("bubble_rois", {}), model=model, device=device)
+    logger.info(f"Bubble reader initialized in {bubble_reader.mode} mode.")
 
 
 @app.get("/api/health")
@@ -133,6 +126,7 @@ async def health_check():
             "weights_present": config.TRAIN_CONFIG["final_model_path"].exists(),
             "trocr_primary": "microsoft/trocr-base-handwritten",
             "easyocr_fallback": True,
+            "bubble_reader_mode": bubble_reader.mode if bubble_reader else "uninitialized",
         },
         "template_questions": len(template_data.get("bubble_rois", {})),
         "default_key_entries": len(default_answer_key),
@@ -230,8 +224,8 @@ async def grade_sheet(
     multi_mark_marks: float = Form(0.0)
 ):
     """Process and grade an uploaded OMR answer sheet."""
-    global preprocessor, ocr_engine, bubble_model, grader, template_data, default_answer_key
-    if preprocessor is None or ocr_engine is None or bubble_model is None or grader is None:
+    global preprocessor, ocr_engine, bubble_reader, grader, template_data, default_answer_key
+    if preprocessor is None or ocr_engine is None or bubble_reader is None or grader is None:
         load_components()
 
     # 1. Validate file extension and MIME type
@@ -280,93 +274,9 @@ async def grade_sheet(
         canonical_bgr = res.canonical_bgr
         norm_gray = res.normalized_gray
 
-        # 6. Bubble Classification (MobileNetV3 + Classical Baseline)
+        # 6. Bubble Classification and decision fusion (shared with src/evaluate.py)
         bubble_rois = template_data.get("bubble_rois", {})
-        device = config.get_device()
-        question_predictions: Dict[int, Dict[str, Any]] = {}
-
-        # PyTorch transform for patches
-        from torchvision import transforms as T
-        patch_transform = T.Compose([
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-
-        for q_num_str, options in bubble_rois.items():
-            q_num = int(q_num_str)
-            filled_opts = []
-            ambiguous_opts = []
-            disagreements = []
-            confidences = {}
-
-            opt_stats = []
-            for opt, roi in options.items():
-                x, y, w, h = roi["x"], roi["y"], roi["w"], roi["h"]
-                m = 6
-                y1 = max(0, y - m)
-                y2 = min(norm_gray.shape[0], y + h + m)
-                x1 = max(0, x - m)
-                x2 = min(norm_gray.shape[1], x + w + m)
-
-                patch = norm_gray[y1:y2, x1:x2]
-                if patch.size == 0:
-                    continue
-
-                patch_48 = cv2.resize(patch, config.BUBBLE_PATCH_SIZE, interpolation=cv2.INTER_AREA)
-
-                # Classical baseline
-                classical_class, fill_ratio = classical_classify_bubble(patch_48)
-
-                # Neural MobileNetV3 prediction
-                patch_pil = Image.fromarray(cv2.cvtColor(patch_48, cv2.COLOR_GRAY2RGB))
-                tensor = patch_transform(patch_pil).unsqueeze(0).to(device)
-
-                with torch.no_grad():
-                    logits = bubble_model(tensor)
-                    probs = torch.softmax(logits, dim=-1).squeeze(0).cpu().numpy()
-                    pred_class_idx = int(np.argmax(probs))
-                    pred_conf = float(probs[pred_class_idx])
-
-                nn_class = config.IDX_TO_CLASS[pred_class_idx]
-                confidences[opt] = round(pred_conf, 4)
-                opt_stats.append((opt, nn_class, pred_conf, fill_ratio, classical_class))
-
-            # Relative margin decision fusion
-            if opt_stats:
-                sorted_by_fill = sorted(opt_stats, key=lambda x: x[3], reverse=True)
-                top_opt, top_nn, top_conf, top_fill, top_c = sorted_by_fill[0]
-                sec_opt, sec_nn, sec_conf, sec_fill, sec_c = sorted_by_fill[1] if len(sorted_by_fill) > 1 else ("", "", 0.0, 0.0, "")
-
-                # Multi-mark condition:
-                # Strictly requires positive CNN confirmation (both_cnn_fill or has_cnn_fill with sec_nn != unfilled)
-                has_cnn_fill = (top_nn == "filled" or sec_nn == "filled")
-                both_cnn_fill = (top_nn == "filled" and sec_nn == "filled")
-
-                is_multi = (
-                    (both_cnn_fill and (top_fill - sec_fill < 0.15)) or
-                    (has_cnn_fill and sec_nn != "unfilled" and top_fill >= 0.28 and sec_fill >= 0.25 and (top_fill - sec_fill < 0.08)) or
-                    (both_cnn_fill and top_fill >= 0.22 and sec_fill >= 0.20)
-                )
-
-                if is_multi:
-                    filled_opts.extend([top_opt, sec_opt])
-                # Clear single answer: significant separation between #1 and #2 candidate
-                elif top_fill >= 0.26 and (top_fill - sec_fill >= 0.05 or (top_nn == "filled" and top_conf > 0.50)):
-                    filled_opts.append(top_opt)
-                    if top_c == "unfilled" and top_fill < 0.20:
-                        disagreements.append(top_opt)
-                elif top_nn == "filled" and top_conf > 0.60 and top_fill >= 0.20 and (top_fill - sec_fill >= 0.03):
-                    filled_opts.append(top_opt)
-                # Unanswered: empty bubbles under shadows remain unanswered when unconfirmed by CNN
-                else:
-                    pass
-
-            question_predictions[q_num] = {
-                "filled_options": filled_opts,
-                "ambiguous_options": ambiguous_opts,
-                "disagreements": disagreements,
-                "confidences": confidences
-            }
+        question_predictions = bubble_reader.read(norm_gray)
 
         # 7. Handwritten Student Metadata Extraction
         student_details = {}

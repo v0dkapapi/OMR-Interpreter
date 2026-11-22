@@ -175,3 +175,56 @@ def test_nonexistent_result_export_404(client):
 
     json_res = client.get("/api/export/unknown-id-12345.json")
     assert json_res.status_code == 404
+
+
+def test_grade_filled_synthetic_photo_scores_correctly(client, monkeypatch):
+    """A synthetic phone capture with known marks must be graded exactly."""
+    import src.app as app_module
+    from src.preprocess import SheetPreprocessor
+
+    # Align against the synthetic reference even when the real dataset is present.
+    monkeypatch.setattr(
+        app_module, "preprocessor",
+        SheetPreprocessor(template_path=config.TEMPLATE_PATH, reference="synthetic"),
+    )
+    # Deterministic stand-in CNN so the test does not depend on trained weights.
+    import torch
+    from src.fusion import BubbleReader
+    from tests.synthetic import FillOracleModel
+    monkeypatch.setattr(
+        app_module, "bubble_reader",
+        BubbleReader(app_module.template_data["bubble_rois"], model=FillOracleModel(), device=torch.device("cpu")),
+    )
+    from tests.synthetic import (
+        answer_key_for, encode_jpeg, make_answer_pattern,
+        render_canonical_sheet, simulate_phone_capture,
+    )
+
+    pattern = make_answer_pattern(seed=21)
+    key, expected_counts = answer_key_for(pattern)
+    sheet = render_canonical_sheet(pattern, app_module.template_data, app_module.preprocessor)
+    photo_bytes = encode_jpeg(simulate_phone_capture(sheet, seed=5))
+
+    response = client.post(
+        "/api/grade",
+        files={"image": ("photo.jpg", io.BytesIO(photo_bytes), "image/jpeg")},
+        data={"answer_key_json": json.dumps({"answers": key}), "negative_marks": "0.25"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    statuses = {q["question"]: q["status"] for q in data["questions"]}
+    counts = {s: sum(1 for v in statuses.values() if v == s) for s in expected_counts}
+
+    assert counts == expected_counts
+    summary = data["summary"]
+    expected_marks = expected_counts["CORRECT"] * 1.0 - expected_counts["INCORRECT"] * 0.25
+    assert summary["marks_obtained"] == round(expected_marks, 2)
+    assert summary["multi_mark_count"] == expected_counts["MULTIPLE_MARK"]
+    assert summary["unanswered_count"] == expected_counts["UNANSWERED"]
+
+    # Multiple marks are never attributed to a single option.
+    for q in data["questions"]:
+        if q["status"] == "MULTIPLE_MARK":
+            assert len(q["selected_options"]) >= 2
+            assert q["marks_awarded"] == 0.0

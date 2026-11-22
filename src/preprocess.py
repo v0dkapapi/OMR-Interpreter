@@ -62,7 +62,12 @@ class SheetPreprocessor:
         template_path: Optional[Union[str, Path]] = None,
         canonical_size: Tuple[int, int] = (config.CANONICAL_WIDTH, config.CANONICAL_HEIGHT),
         confidence_threshold: float = config.ALIGNMENT_CONFIDENCE_THRESHOLD,
+        reference: Optional[str] = None,
     ):
+        # Reference sheet for feature alignment: "auto" uses the real p01-f01 scan
+        # when the dataset is available, else a synthetic sheet rendered from the
+        # template; "synthetic" always uses the template rendering (used by tests).
+        self.reference = (reference or os.getenv("OMR_REFERENCE_SHEET", "auto")).lower()
         self.template_path = Path(template_path) if template_path else config.TEMPLATE_PATH
         self.canonical_width, self.canonical_height = canonical_size
         self.confidence_threshold = confidence_threshold
@@ -93,7 +98,7 @@ class SheetPreprocessor:
         """Initialize reference sheet and anchor templates."""
         ref_candidate = config.VISION_IMAGES_DIR / "p01" / "p01-f01-scan.jpg"
         try:
-            if ref_candidate.exists():
+            if self.reference != "synthetic" and ref_candidate.exists():
                 raw = cv2.imread(str(ref_candidate))
                 if raw is not None:
                     self._ref_bgr = cv2.resize(raw, (self.canonical_width, self.canonical_height))

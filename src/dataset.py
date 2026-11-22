@@ -29,6 +29,18 @@ from src.preprocess import SheetPreprocessor
 logger = logging.getLogger(__name__)
 
 
+def _round_robin_by_contributor(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Order label rows so consecutive rows come from different contributors."""
+    by_person: Dict[str, List[Dict[str, str]]] = {}
+    for r in rows:
+        by_person.setdefault(r["contributor"], []).append(r)
+    queues = [by_person[p] for p in sorted(by_person)]
+    ordered: List[Dict[str, str]] = []
+    for i in range(max((len(q) for q in queues), default=0)):
+        ordered.extend(q[i] for q in queues if i < len(q))
+    return ordered
+
+
 def parse_erased_and_sloppy(changed_str: str, sloppy_str: str) -> Tuple[Dict[int, str], Dict[int, str]]:
     """Parse changed (e.g. 'q11:E>C; q39:C>B') and sloppy (e.g. 'q12:circle B; q21:multiple CD')."""
     erased = {} # q_num -> erased option(s)
@@ -206,7 +218,12 @@ class PatchExtractor:
         if max_forms:
             n_train = max(1, max_forms * 2 // 3)
             n_val = max(1, max_forms - n_train)
-            selected_rows = train_rows[:n_train] + val_rows[:n_val]
+            # Spread the form budget across contributors (one form per person per
+            # round) so a small budget does not collapse to a single person.
+            selected_rows = (
+                _round_robin_by_contributor(train_rows)[:n_train]
+                + _round_robin_by_contributor(val_rows)[:n_val]
+            )
         else:
             selected_rows = train_rows + val_rows
 

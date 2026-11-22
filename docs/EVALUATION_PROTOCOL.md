@@ -39,29 +39,31 @@ Telemetry score (0.0 to 1.0) derived from SIFT inlier ratio, affine condition nu
 
 The official benchmark results recorded in `outputs/evaluation_report.json` across all 90 stress test sheets:
 
-| Dimension | Slice | Sheets | Questions | Accuracy (%) | Multi-Mark Prec | Multi-Mark Rec | Multi-Mark F1 | Mean Align Conf |
-|---|---|---|---|---|---|---|---|---|
-| **Condition** | `scan` | 30 | 3,600 | 79.28% | 28.21% | 47.14% | 35.29% | 0.699 |
-| | `photo` | 30 | 3,600 | 83.53% | 46.05% | 50.00% | 47.95% | 0.704 |
-| | `hard` | 30 | 3,600 | 76.75% | 31.68% | 45.71% | 37.43% | 0.687 |
-| **Contributor** | `p03` | 30 | 3,600 | 78.47% | 30.48% | 53.33% | 38.80% | 0.716 |
-| | `p04` | 30 | 3,600 | 82.36% | 49.44% | 61.11% | 54.74% | 0.718 |
-| | `p19` | 30 | 3,600 | 78.72% | 24.00% | 30.77% | 27.03% | 0.656 |
-| **Overall** | **All Sheets** | **90** | **10,800** | **79.85%** | **34.01%** | **47.62%** | **39.68%** | **0.697** |
+| Dimension | Slice | Sheets | Questions | Accuracy (%) | Invalid Prec | Invalid Rec | Invalid F1 | REVIEW rate | Mean Align Conf |
+|---|---|---|---|---|---|---|---|---|---|
+| **Condition** | `scan` | 30 | 3,600 | 93.92% | 75.56% | 48.57% | 59.13% | 1.78% | 0.712 |
+| | `photo` | 30 | 3,600 | 93.86% | 75.00% | 47.14% | 57.89% | 2.83% | 0.697 |
+| | `hard` | 30 | 3,600 | 92.06% | 68.89% | 44.29% | 53.91% | 2.64% | 0.699 |
+| **Contributor** | `p03` | 30 | 3,600 | 92.97% | 100.00% | 35.00% | 51.85% | 3.92% | 0.754 |
+| | `p04` | 30 | 3,600 | 98.42% | 92.16% | 65.28% | 76.42% | 0.39% | 0.714 |
+| | `p19` | 30 | 3,600 | 88.44% | 48.39% | 38.46% | 42.86% | 2.94% | 0.641 |
+| **Overall** | **All Sheets** | **90** | **10,800** | **93.28%** | **73.13%** | **46.67%** | **56.98%** | **2.42%** | **0.703** |
 
 - Total questions evaluated: 10,800
-- Total correct answers: 8,624 (79.85%)
-- Multi-mark instances detected: 100 out of 210 ground-truth multi-marks (Recall: 47.62%)
-- Total execution time: 34.0 seconds ($\approx 0.38$ seconds per 120-question sheet)
+- Total correct answers: 10,074 (93.28%)
+- "Invalid" columns: ground truth `?` covers multiple marks and ticks, circles, crosses and faint marks (see Experiment 4 in docs/EXPERIMENT_LOG.md)
+- Questions routed to REVIEW for a proctor: 261 (2.42%)
+- Total execution time: 23.5 seconds ($\approx 0.26$ seconds per 120-question sheet, `--no-ocr`)
 
 ---
 
 ## 4. Evaluation History & Optimism Disclaimer
 
-Over the course of development, three distinct formal evaluation runs were conducted:
+Over the course of development, four formal evaluation runs were conducted:
 1. **Run 1 (Baseline MobileNetV3):** Initial model trained on single-person crops. Achieved 78.69% accuracy on stress test images, with multi-mark recall of 44.29%.
 2. **Run 2 (Multi-Person Fine-Tuning & Decision Fusion):** Fine-tuned across 10 diverse training persons with CNN-confirmed decision fusion. Overall accuracy increased to 79.85%, multi-mark recall rose to 47.62%, and phone photo accuracy reached 83.53%.
 3. **Run 3 (Metadata OCR Telemetry):** Added envelope padding and graceful fallback between TrOCR and EasyOCR for handwritten student metadata.
+4. **Run 4 (Multi-Contributor Retraining & CNN-Veto Fusion):** Retrained across 42 contributors after fixing a patch-selection bug, and retuned fusion on validation contributors only. Overall accuracy 93.28%, invalid-answer precision 73.13%, 2.42% of questions routed to REVIEW. Rebuilt `stress_test/` from `vision_ds` images, so not strictly comparable with Runs 1 to 3.
 
 ### Optimism Disclaimer
-The 79.85% accuracy benchmark is measured across 90 sheets from 3 contributors (`p03`, `p04`, `p19`). While these sheets represent challenging mobile photos, severe skew, and lighting gradients, real-world deployment across different institutions, varying paper weights, and alternative writing instruments (e.g., gel pens, markers) may exhibit variance. Systems deployed in high-stakes examination environments should always route flagged `REVIEW` and `LOW_ALIGNMENT_CONFIDENCE` sheets to human proctor verification.
+The 93.28% accuracy benchmark is measured across 90 sheets from 3 contributors (`p03`, `p04`, `p19`). While these sheets represent challenging mobile photos, severe skew, and lighting gradients, real-world deployment across different institutions, varying paper weights, and alternative writing instruments (e.g., gel pens, markers) may exhibit variance. Systems deployed in high-stakes examination environments should always route flagged `REVIEW` and `LOW_ALIGNMENT_CONFIDENCE` sheets to human proctor verification.

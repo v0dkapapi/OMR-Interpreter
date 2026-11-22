@@ -406,7 +406,8 @@ document.addEventListener("DOMContentLoaded", () => {
       let statusClass = "badge-neutral";
       if (statusText === "CORRECT") statusClass = "badge-correct";
       else if (statusText === "INCORRECT") statusClass = "badge-incorrect";
-      else if (statusText === "MULTIPLE_MARK") statusClass = "badge-multimark";
+      else if (statusText === "MULTIPLE_MARK") statusClass = "badge-multiple";
+      else if (statusText === "UNANSWERED") statusClass = "badge-unanswered";
       else if (statusText === "REVIEW") statusClass = "badge-review";
 
       // Flags

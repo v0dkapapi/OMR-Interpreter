@@ -80,20 +80,28 @@ DATA_ROOT = Path(os.getenv("OMR_DATA_ROOT", str((PROJECT_ROOT.parent / "omr-data
 
 ## 3. Step-by-Step Commands
 
+### 0. Set Up the Dataset (optional for tests, required for training and evaluation)
+Google Drive downloads the dataset as several zip parts. Merge them into `OMR_DATA_ROOT` (default `../omr-data/data`):
+```bash
+python scripts/setup_dataset.py ~/Downloads/AI-for-Vision-Dataset-*.zip
+```
+This creates `vision_ds/` and a `stress_test/` folder of symlinks to the `p03`, `p04` and `p19` images.
+
 ### A. Run Automated Unit & Integration Tests
-Run the comprehensive test suite (24 unit tests across preprocessing, bubble classification, OCR validation, deterministic grading, and FastAPI endpoints):
+Run the test suite (preprocessing, decision fusion, OCR validation, deterministic grading, batch CLI, and FastAPI endpoints):
 ```bash
 pytest tests/ -v
 ```
+The suite does not need the private dataset: integration tests generate synthetic answer sheets from `template.json` (see `tests/synthetic.py`), including perspective-warped "phone" captures that exercise SIFT alignment. Three tests skip automatically when `OMR_DATA_ROOT` or the local `roster.csv` is absent.
 
 ### B. Train the Bubble Classifier
 Fine-tune MobileNetV3-Small on extracted $48 \times 48$ bubble patches with data augmentations, person-isolated train/validation splits (strictly excluding `p03`, `p04`, and `p19`), and per-epoch checkpoints:
 ```bash
-# Default training (subset of 3000 patches for thermal discipline)
-python src/train_bubble_model.py
+# Benchmark configuration (Run 4: 90 forms across 71 contributors, about 1 minute on an M-series Mac)
+python src/train_bubble_model.py --epochs 5 --subset 20000 --max-forms 90 --force-extract
 
-# Custom configuration (e.g., 5 epochs, 64 batch size, 5000 subset)
-python src/train_bubble_model.py --epochs 5 --batch-size 64 --subset-size 5000
+# Quick smoke run (defaults: 4 epochs, 5000-patch subset, 15 forms)
+python src/train_bubble_model.py
 ```
 Outputs saved:
 - Weights: `models/bubble_mobilenet_v3.pth`
@@ -118,7 +126,15 @@ Outputs saved:
 - Visual Failure Cases: `outputs/failures/{sheet_id}_overlay.jpg` (detected bubbles overlaid on sheet: flagged in red `#DC2626`, conforming in neutral gray)
 - Failure Details: `outputs/failures/{sheet_id}_fail.json`
 
-### D. Launch the FastAPI Web Application & Dashboard
+### D. Batch-Grade a Folder of Sheets
+Grade every image in a folder with the same pipeline as the web API, using several worker processes:
+```bash
+python -m src.batch_grade path/to/sheets --out outputs/batch --workers 4 \
+    --answer-key answer_key.json --negative-marks 0.25
+```
+Outputs: `outputs/batch/batch_summary.csv` (one row per sheet) and `outputs/batch/sheets/{stem}.json` (full report). Add `--ocr` to extract handwritten fields; the name field is always redacted in batch outputs. A sheet that fails to load is reported as `ERROR` without stopping the batch.
+
+### E. Launch the FastAPI Web Application & Dashboard
 Start the production server:
 ```bash
 uvicorn src.app:app --host 127.0.0.1 --port 8000 --reload
@@ -148,20 +164,22 @@ curl http://127.0.0.1:8000/api/export/<result_id>.json -o report.json
 
 ## 4. Benchmark & Stress Test Results
 
-Across all 90 stress test images in `DATA_ROOT/stress_test/`:
+Across all 90 stress test images in `DATA_ROOT/stress_test/` (Run 4, see `docs/EVALUATION_PROTOCOL.md`):
 
-| Dimension | Category | Sheets | Answer-Level Accuracy | Multi-Mark Prec | Multi-Mark Recall | Mean Alignment Conf |
-|---|---|---|---|---|---|---|
-| **Capture Condition** | `scan` | 30 | 79.28% (up to 97.5% on clean scans) | 28.21% | 47.14% | 0.699 |
-| | `photo` | 30 | 83.53% (up to 97.5% on standard photos) | 46.05% | 50.00% | 0.704 |
-| | `hard` | 30 | 76.75% | 31.68% | 45.71% | 0.687 |
-| **Contributor** | `p03` (pencil, sloppy marks) | 30 | 78.47% | 30.48% | 53.33% | 0.716 |
-| | `p04` (high-skew phone photos) | 30 | 82.36% | 49.44% | 61.11% | 0.718 |
-| | `p19` (extreme lighting gradients) | 30 | 78.72% | 24.00% | 30.77% | 0.656 |
-| **Overall Benchmark** | **All 90 Sheets** | **90** | **79.85% (8,624 / 10,800 Qs)** | **34.01%** | **47.62%** | **0.697** |
+| Dimension | Slice | Sheets | Questions | Accuracy (%) | Invalid Prec | Invalid Rec | Invalid F1 | REVIEW rate | Mean Align Conf |
+|---|---|---|---|---|---|---|---|---|---|
+| **Condition** | `scan` | 30 | 3,600 | 93.92% | 75.56% | 48.57% | 59.13% | 1.78% | 0.712 |
+| | `photo` | 30 | 3,600 | 93.86% | 75.00% | 47.14% | 57.89% | 2.83% | 0.697 |
+| | `hard` | 30 | 3,600 | 92.06% | 68.89% | 44.29% | 53.91% | 2.64% | 0.699 |
+| **Contributor** | `p03` | 30 | 3,600 | 92.97% | 100.00% | 35.00% | 51.85% | 3.92% | 0.754 |
+| | `p04` | 30 | 3,600 | 98.42% | 92.16% | 65.28% | 76.42% | 0.39% | 0.714 |
+| | `p19` | 30 | 3,600 | 88.44% | 48.39% | 38.46% | 42.86% | 2.94% | 0.641 |
+| **Overall** | **All Sheets** | **90** | **10,800** | **93.28%** | **73.13%** | **46.67%** | **56.98%** | **2.42%** | **0.703** |
 
-- **Inference Speed:** All 90 sheets ($10,800$ individual questions) evaluated in **34.0 seconds** ($\approx 0.38$ seconds per 120-question sheet) using vectorized tensor batching.
-- **Multi-Person Fine-Tuning & Decision Fusion:** MobileNetV3-Small fine-tuned for 4 epochs on 7,492 balanced bubble patches across 10 train contributors and 5 disjoint val contributors (completely excluding `p03`, `p04`, and `p19`). Paired with CNN-confirmed decision fusion, overall accuracy reached **79.85%** (8,624 / 10,800 questions), multi-mark recall reached **47.62%** (100 / 210 true multi-marks detected), and photo accuracy rose to **83.53%** without threshold retuning.
+- **Inference Speed:** All 90 sheets (10,800 questions) evaluated in about 23.5 seconds (about 0.26 seconds per sheet, `--no-ocr`), with all 600 bubbles per sheet classified in one batch.
+- **Training:** MobileNetV3-Small fine-tuned for 5 epochs on 14,400 patches from 42 training contributors, validated on 5,600 patches from 29 disjoint contributors (92.84% patch accuracy). `p03`, `p04` and `p19` are never used for training or tuning.
+- **Decision Fusion:** CNN-veto fusion (`src/fusion.py`) tuned on validation contributors only. The previous rules scored 75.20% on the same stress set; most of the gain comes from stopping blank questions being read as answered.
+- **Invalid answers:** ground truth `?` covers both multiple marks and ticks, circles, crosses and faint marks, so the precision and recall columns measure invalid-answer detection.
 - **Safety Mechanism:** Sheets with severe perspective distortion or shadows automatically trigger `LOW_ALIGNMENT_CONFIDENCE` rather than emitting silent incorrect scores.
 
 ---
@@ -193,4 +211,4 @@ The dashboard adheres strictly to the project UI guidelines:
 1. **Adaptive Sub-Block Homography Refinement:** After initial global homography, perform local $2 \times 2$ TPS (Thin Plate Spline) or block correlation on each of the 4 question columns to eliminate residual 2–5 px alignment drifts.
 2. **Synthetic Pencil Mark Augmentation:** Incorporate synthetic faint shading and eraser smudges into the MobileNetV3 augmentation pipeline to improve faint pencil recall.
 3. **YOLO-Based Corner Fiducial Detector:** Train a tiny nano-model (e.g. YOLOv8-nano) specifically on the 4 corner fiducial squares to provide bulletproof quadrilateral recovery even when 1 or 2 corners are partially cropped.
-4. **Interactive Human-in-the-Loop Review UI:** Add an inline verification interface where human exam proctors can approve or correct flagged `REVIEW` and `MULTIPLE_MARK` questions directly in the browser.
+4. **Interactive Human-in-the-Loop Review UI (still open):** Add an inline verification interface where human exam proctors can approve or correct flagged `REVIEW` and `MULTIPLE_MARK` questions directly in the browser.

@@ -243,3 +243,22 @@ def test_full_120_question_grading_and_serialization(grader):
     assert "Marks Obtained,97.5" in csv_str
     assert "Percentage,81.25%" in csv_str
     assert "Question,Selected Option(s),Expected Answer" in csv_str
+
+
+def test_missing_answer_key_entry_not_reported_correct(grader):
+    """A marked question with no answer key entry must not be reported as CORRECT."""
+    predictions = {
+        1: {"filled_options": ["A"]},
+        2: {"filled_options": ["B"]},
+    }
+    answer_key = {"1": "A"}  # question 2 has no key entry
+    cfg = ScoringConfig(marks_per_correct=1.0, total_questions=2)
+
+    result = grader.grade(predictions, answer_key=answer_key, scoring_config=cfg)
+
+    q2 = result.questions[1]
+    assert q2.status == QuestionStatus.NOT_GRADED
+    assert q2.marks_awarded == 0.0
+    assert "NO_ANSWER_KEY_ENTRY" in q2.flags
+    assert result.summary.correct_count == 1
+    assert result.summary.answered_count == 2

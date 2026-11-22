@@ -5,6 +5,7 @@ Rules implemented:
 - One option filled and wrong -> award configured negative or zero marking (e.g. -0.25 or 0.0)
 - 2+ options filled on same question -> MULTIPLE_MARK, scored per rule (default 0.0), never attributed to single option, never crashes
 - No options filled -> UNANSWERED, scored per rule (default 0.0)
+- One option filled but no answer key entry -> NOT_GRADED (0.0, flagged NO_ANSWER_KEY_ENTRY)
 - Ambiguous bubbles or model vs fill-ratio disagreements -> REVIEW, routed to flagged issues panel
 - Deterministic calculation of total score, marks obtained, percentage, and summary counts
 - CSV and JSON export serialization helpers
@@ -28,6 +29,7 @@ class QuestionStatus(str, Enum):
     MULTIPLE_MARK = "MULTIPLE_MARK"
     UNANSWERED = "UNANSWERED"
     REVIEW = "REVIEW"
+    NOT_GRADED = "NOT_GRADED"   # answered, but the answer key has no entry for this question
 
 
 @dataclass
@@ -291,8 +293,8 @@ class OMRGrader:
                 answered_count += 1
 
                 if expected_opt is None:
-                    # No expected answer in answer key
-                    status = QuestionStatus.CORRECT
+                    # No expected answer in answer key: never report as CORRECT
+                    status = QuestionStatus.NOT_GRADED
                     marks = 0.0
                     q_flags.append("NO_ANSWER_KEY_ENTRY")
                 elif chosen == expected_opt:

@@ -25,9 +25,6 @@ from typing import Dict, Any, List, Tuple, Optional
 
 import cv2
 import numpy as np
-from PIL import Image
-import torch
-from torchvision import transforms as T
 
 # Ensure MPS fallback before torch import
 os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
@@ -37,7 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 import config
 from src.preprocess import SheetPreprocessor, PreprocessResult
-from src.train_bubble_model import build_model, classical_classify_bubble
+from src.fusion import BubbleReader, answer_symbol, load_bubble_model
 from src.handwriting_ocr import HandwritingOCR
 from src.grader import OMRGrader, ScoringConfig, QuestionStatus
 
@@ -153,20 +150,12 @@ class StressEvaluator:
         self.preprocessor = SheetPreprocessor(template_path=config.TEMPLATE_PATH)
         self.device = config.get_device()
 
-        # Bubble Model
-        model_path = config.TRAIN_CONFIG["final_model_path"]
-        self.bubble_model = build_model(num_classes=3, pretrained=False).to(self.device)
-        if model_path.exists():
-            logger.info(f"Loading trained weights: {model_path}")
-            self.bubble_model.load_state_dict(torch.load(model_path, map_location=self.device))
-        else:
-            logger.warning("Bubble model weights not found! Running baseline.")
-        self.bubble_model.eval()
-
-        self.patch_transform = T.Compose([
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
+        # Bubble reader (same fusion code path as the live API)
+        model = load_bubble_model(self.device)
+        if model is None:
+            logger.warning("Bubble model weights not found. Evaluating fill-margin-only baseline.")
+        self.bubble_reader = BubbleReader(self.bubble_rois, model=model, device=self.device)
+        logger.info(f"Bubble reader mode: {self.bubble_reader.mode}")
 
         # OCR Engine (Fast fallback for evaluation speed)
         self.ocr_engine = HandwritingOCR(use_trocr=False) if use_ocr else None
@@ -216,111 +205,11 @@ class StressEvaluator:
 
     def evaluate_sheet_bubbles(
         self,
-        norm_gray: np.ndarray,
-        raw_gray: np.ndarray
+        norm_gray: np.ndarray
     ) -> Tuple[Dict[int, Dict[str, Any]], Dict[int, str]]:
-        """Run batched bubble extraction and inference for 120 questions."""
-        patches_for_nn = []
-        metadata_list = []  # (q_num, opt, c_class, fill_ratio)
-
-        for q_str, opts in self.bubble_rois.items():
-            q_num = int(q_str)
-            for opt, roi in opts.items():
-                x, y, w, h = roi["x"], roi["y"], roi["w"], roi["h"]
-                m = 6
-                y1 = max(0, y - m)
-                y2 = min(norm_gray.shape[0], y + h + m)
-                x1 = max(0, x - m)
-                x2 = min(norm_gray.shape[1], x + w + m)
-
-                patch = norm_gray[y1:y2, x1:x2]
-                if patch.size == 0:
-                    patch_48 = np.full(config.BUBBLE_PATCH_SIZE, 255, dtype=np.uint8)
-                else:
-                    patch_48 = cv2.resize(patch, config.BUBBLE_PATCH_SIZE, interpolation=cv2.INTER_AREA)
-
-                # Classical baseline
-                c_class, fill_ratio = classical_classify_bubble(patch_48)
-
-                # Also check raw grayscale min/mean for pencil shading detection
-                raw_patch = raw_gray[y:y+h, x:x+w]
-                raw_min = int(raw_patch.min()) if raw_patch.size > 0 else 255
-
-                pil_patch = Image.fromarray(cv2.cvtColor(patch_48, cv2.COLOR_GRAY2RGB))
-                tensor_patch = self.patch_transform(pil_patch)
-
-                patches_for_nn.append(tensor_patch)
-                metadata_list.append((q_num, opt, c_class, fill_ratio, raw_min))
-
-        # Batched CNN inference
-        batch_tensor = torch.stack(patches_for_nn).to(self.device)
-        with torch.no_grad():
-            logits = self.bubble_model(batch_tensor)
-            probs = torch.softmax(logits, dim=-1).cpu().numpy()
-            pred_indices = np.argmax(probs, axis=-1)
-
-        # Assemble per-question predictions using CNN + Relative Margin fusion
-        question_preds: Dict[int, Dict[str, Any]] = {}
-        single_answer_preds: Dict[int, str] = {}
-
-        # Organize by question
-        by_q: Dict[int, List[Tuple[str, str, float, float, int]]] = {}
-        for idx, (q_num, opt, c_class, fill_ratio, raw_min) in enumerate(metadata_list):
-            nn_class = config.IDX_TO_CLASS[int(pred_indices[idx])]
-            conf = float(probs[idx, pred_indices[idx]])
-            if q_num not in by_q:
-                by_q[q_num] = []
-            by_q[q_num].append((opt, nn_class, conf, fill_ratio, raw_min))
-
-        for q_num, opt_list in by_q.items():
-            question_preds[q_num] = {
-                "filled_options": [],
-                "ambiguous_options": [],
-                "disagreements": [],
-                "confidences": {item[0]: item[2] for item in opt_list}
-            }
-
-            # Sort by fill ratio descending
-            sorted_by_fill = sorted(opt_list, key=lambda x: x[3], reverse=True)
-            top_opt, top_nn, top_conf, top_fill, top_raw = sorted_by_fill[0]
-            sec_opt, sec_nn, sec_conf, sec_fill, sec_raw = sorted_by_fill[1]
-
-            # Calibrated relative margin and decision fusion logic
-            filled_opts = []
-            ambiguous_opts = []
-
-            # Multi-mark condition:
-            # Strictly requires positive CNN confirmation (both_cnn_fill or has_cnn_fill with sec_nn != unfilled)
-            has_cnn_fill = (top_nn == "filled" or sec_nn == "filled")
-            both_cnn_fill = (top_nn == "filled" and sec_nn == "filled")
-
-            is_multi = (
-                (both_cnn_fill and (top_fill - sec_fill < 0.15)) or
-                (has_cnn_fill and sec_nn != "unfilled" and top_fill >= 0.28 and sec_fill >= 0.25 and (top_fill - sec_fill < 0.08)) or
-                (both_cnn_fill and top_fill >= 0.22 and sec_fill >= 0.20)
-            )
-
-            if is_multi:
-                filled_opts.extend([top_opt, sec_opt])
-            # Single answer: clear separation between #1 and #2 candidate
-            elif top_fill >= 0.26 and (top_fill - sec_fill >= 0.05 or (top_nn == "filled" and top_conf > 0.50)):
-                filled_opts.append(top_opt)
-            elif top_nn == "filled" and top_conf > 0.60 and top_fill >= 0.20 and (top_fill - sec_fill >= 0.03):
-                filled_opts.append(top_opt)
-            # Unanswered: empty bubbles under shadows remain unanswered when unconfirmed by CNN
-            else:
-                pass
-
-            question_preds[q_num]["filled_options"] = filled_opts
-            question_preds[q_num]["ambiguous_options"] = ambiguous_opts
-
-            if len(filled_opts) == 1:
-                single_answer_preds[q_num] = filled_opts[0]
-            elif len(filled_opts) > 1:
-                single_answer_preds[q_num] = "?"  # Multiple mark
-            else:
-                single_answer_preds[q_num] = "-"  # Unanswered
-
+        """Run batched bubble inference and fusion for all questions on one sheet."""
+        question_preds = self.bubble_reader.read(norm_gray)
+        single_answer_preds = {q: answer_symbol(p) for q, p in question_preds.items()}
         return question_preds, single_answer_preds
 
     def run(
@@ -336,18 +225,18 @@ class StressEvaluator:
 
         # Metric Accumulators
         per_condition: Dict[str, Dict[str, Any]] = {
-            "scan": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0},
-            "photo": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0},
-            "hard": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0},
+            "scan": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0, "review_q": 0},
+            "photo": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0, "review_q": 0},
+            "hard": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0, "review_q": 0},
         }
 
         per_person: Dict[str, Dict[str, Any]] = {
-            "p03": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0},
-            "p04": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0},
-            "p19": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0},
+            "p03": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0, "review_q": 0},
+            "p04": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0, "review_q": 0},
+            "p19": {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "conf_sum": 0.0, "sheets": 0, "low_conf": 0, "review_q": 0},
         }
 
-        overall = {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "sheets": 0}
+        overall = {"total_q": 0, "correct_q": 0, "tp": 0, "fp": 0, "fn": 0, "sheets": 0, "review_q": 0, "conf_sum": 0.0, "low_conf": 0}
         failure_records = []
 
         start_time = time.time()
@@ -362,9 +251,18 @@ class StressEvaluator:
             is_low_conf = "LOW_ALIGNMENT_CONFIDENCE" in res.flags
 
             # 2. Bubble Inference
-            q_preds, single_preds = self.evaluate_sheet_bubbles(
-                res.normalized_gray, res.canonical_gray
+            q_preds, single_preds = self.evaluate_sheet_bubbles(res.normalized_gray)
+
+            # 2b. Route through the deterministic grader to count REVIEW questions,
+            # exactly as the live API would flag them for a proctor.
+            graded = self.grader.grade(
+                q_preds,
+                answer_key=None,
+                scoring_config=ScoringConfig(total_questions=len(self.bubble_rois)),
+                alignment_confidence=res.confidence,
+                alignment_flags=res.flags,
             )
+            sheet_review = graded.summary.review_count
 
             # 3. OCR (if enabled)
             ocr_meta = {}
@@ -434,6 +332,9 @@ class StressEvaluator:
                 overall["fn"] += fn
 
             per_condition[condition]["sheets"] += 1
+            per_condition[condition]["review_q"] += sheet_review
+            per_person[person]["review_q"] += sheet_review
+            overall["review_q"] += sheet_review
             per_condition[condition]["conf_sum"] += align_conf
             if is_low_conf:
                 per_condition[condition]["low_conf"] += 1
@@ -444,6 +345,8 @@ class StressEvaluator:
                 per_person[person]["low_conf"] += 1
 
             overall["sheets"] += 1
+            overall["conf_sum"] += align_conf
+            overall["low_conf"] += int(is_low_conf)
 
             sheet_acc = (sheet_correct / sheet_total) * 100.0 if sheet_total > 0 else 0.0
             dt = time.time() - t0
@@ -513,6 +416,8 @@ class StressEvaluator:
                 "multi_mark_f1": round(f1, 2),
                 "mean_alignment_confidence": round(conf_avg, 3),
                 "low_alignment_rate_percent": round(low_conf_pct, 1),
+                "review_questions": d.get("review_q", 0),
+                "review_rate_percent": round((d.get("review_q", 0) / float(tot_q)) * 100.0, 2) if tot_q > 0 else 0.0,
                 "sheets_evaluated": sheets
             }
 
@@ -553,6 +458,7 @@ class StressEvaluator:
             f"   - Multi-Mark Precision:     {report['overall']['multi_mark_precision']}%",
             f"   - Multi-Mark Recall:        {report['overall']['multi_mark_recall']}%",
             f"   - Multi-Mark F1 Score:      {report['overall']['multi_mark_f1']}%",
+            f"   - Routed to REVIEW:         {report['overall']['review_rate_percent']}% ({report['overall']['review_questions']} questions)",
             "",
             "2. PERFORMANCE BY CAPTURE CONDITION:",
             "   Condition | Sheets | Accuracy | Multi-Mark Prec | Multi-Mark Rec | F1     | Align Conf",

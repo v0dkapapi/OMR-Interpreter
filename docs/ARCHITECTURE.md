@@ -77,10 +77,12 @@ flowchart TD
 - **Dual Inference Channels:**
   - **Classical Baseline:** Extracts circular ROI, computes Otsu binarization, and measures fill ratio against a circular mask. Fill ratios $\ge 0.38$ indicate filled bubbles; ratios between $0.20$ and $0.42$ indicate ambiguous marks.
   - **MobileNetV3-Small Classifier:** 48x48 patches are evaluated by a fine-tuned MobileNetV3-Small network outputting probabilities across 3 classes: `unfilled`, `filled`, and `ambiguous`.
-- **Decision Fusion Implementation:**
-  - Identifies the highest filled candidate per question and measures relative margin against the second candidate.
-  - Where the CNN predicts `filled` with high confidence ($>0.70$) and the classical fill ratio corroborates ($>0.30$), the option is marked as filled.
-  - If the classical baseline and CNN disagree (e.g., fill ratio $>0.38$ but CNN predicts `unfilled`, or fill ratio $<0.20$ but CNN predicts `filled`), the question is flagged for `REVIEW`.
+- **Decision Fusion Implementation (`src/fusion.py`, shared by `src/app.py`, `src/evaluate.py` and `src/batch_grade.py`):**
+  - All 600 patches on a sheet are classified in a single CNN batch. Thresholds are named constants at the top of `src/fusion.py`, tuned on validation contributors only (Experiment 4).
+  - **Multiple mark:** two or more options CNN-`filled` with confidence $> 0.80$. Confident CNN evidence on every option keeps shadows and printed letters from invalidating a correct answer.
+  - **Fill-margin single answer:** darkest option fill $\ge 0.26$ and either $\ge 0.05$ ahead of the runner-up or CNN-`filled` with confidence $> 0.50$. The CNN vetoes it when it says `unfilled` with confidence $> 0.50$, which removes most false marks on blank rows. A vetoed bubble with fill $\ge 0.80$ is a genuine disagreement and goes to `REVIEW`.
+  - **CNN single answer:** if nothing was selected and exactly one option is CNN-`filled` with confidence $> 0.80$, it is accepted (faint pencil marks). If its fill ratio is below $0.10$, the disagreement goes to `REVIEW`.
+  - **Fill-margin-only mode:** without trained weights in `models/bubble_mobilenet_v3.pth`, every option gets CNN class `none`, so only the fill-margin rule fires (no veto and no multi-mark detection; 71.43% on the stress test). `/api/health` reports the active `bubble_reader_mode`.
 
 ### 2.3 Phase 3: Handwritten Metadata OCR (`src/handwriting_ocr.py`)
 - **Metadata Fields:** Name, Student Number (written), Module Code, Seat Number, Examination Date.

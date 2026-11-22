@@ -63,3 +63,40 @@ This document records the experimental milestones, model iterations, validation 
   - ROI bounding box margin expansion to prevent clipping ascenders/descenders on loose handwriting.
   - Alphanumeric code post-processing for module codes (`EEN32930`) and seat numbers (`F-376`).
   - Structured error fallback when local neural engine runs in restricted sandbox or CPU environments.
+
+---
+
+## Experiment 4: Multi-Contributor Retraining & CNN-Veto Decision Fusion
+
+- **Date:** November 22, 2026
+- **Dataset:** Fresh download of S3231 v1.0 (2,184 images, 740 forms). `stress_test/` rebuilt with `scripts/setup_dataset.py` as symlinks to the `p03`, `p04`, `p19` images in `vision_ds/images/`. The original `stress_test/` captures used for Experiments 1 to 3 had different file names (for example `p03-01-scan.jpg`, `hardphoto`, `.jpeg`), so earlier numbers are not strictly comparable.
+- **Bug found in patch extraction:** `build_cache(max_forms=N)` took the first N rows of `labels.csv`, which is sorted by contributor, so `--max-forms 15` trained on a single person (`p07`) and validated on a single person (`p01`). Fixed with round-robin selection across contributors (`_round_robin_by_contributor`).
+- **Model Training:** MobileNetV3-Small (ImageNet-pretrained), 5 epochs, `--max-forms 90 --subset 20000`.
+  - Training: 14,400 patches from 42 contributors. Validation: 5,600 patches from 29 disjoint contributors. `p03`, `p04`, `p19` excluded.
+  - Validation patch accuracy: 92.84% (93.27% best epoch).
+- **Error analysis with the previous fusion rules (stress test, 75.20%):** 58% of errors were blank questions read as answered, 22% marked answers read as blank, 9% single answers called multi-mark. The fill-margin rule accepted the darkest bubble without consulting the CNN, so printed letters and small misalignment on unused rows became answers.
+- **Fusion retuning (validation contributors only, 175 sheets from 29 people, forms not used during training):**
+
+  | Variant | Validation accuracy | Invalid precision | REVIEW rate |
+  |---|---|---|---|
+  | Previous rules | 73.58% | 17% | 0.0% |
+  | + CNN veto on fill-margin answers | 90.62% | 17% | n/a |
+  | + CNN acceptance of faint marks | 92.50% | 17% | n/a |
+  | + CNN-confidence multi-mark rule (conf > 0.8) | 93.44% | 89% | 14.4% (too broad) |
+  | + narrowed disagreement rules (final) | **93.56%** | **89%** | **1.83%** |
+
+- **Stress test (evaluated once, after tuning was frozen):**
+
+| Dimension | Slice | Sheets | Questions | Accuracy (%) | Invalid Prec | Invalid Rec | Invalid F1 | REVIEW rate | Mean Align Conf |
+|---|---|---|---|---|---|---|---|---|---|
+| **Condition** | `scan` | 30 | 3,600 | 93.92% | 75.56% | 48.57% | 59.13% | 1.78% | 0.712 |
+| | `photo` | 30 | 3,600 | 93.86% | 75.00% | 47.14% | 57.89% | 2.83% | 0.697 |
+| | `hard` | 30 | 3,600 | 92.06% | 68.89% | 44.29% | 53.91% | 2.64% | 0.699 |
+| **Contributor** | `p03` | 30 | 3,600 | 92.97% | 100.00% | 35.00% | 51.85% | 3.92% | 0.754 |
+| | `p04` | 30 | 3,600 | 98.42% | 92.16% | 65.28% | 76.42% | 0.39% | 0.714 |
+| | `p19` | 30 | 3,600 | 88.44% | 48.39% | 38.46% | 42.86% | 2.94% | 0.641 |
+| **Overall** | **All Sheets** | **90** | **10,800** | **93.28%** | **73.13%** | **46.67%** | **56.98%** | **2.42%** | **0.703** |
+
+- **Fill-margin-only mode (no weights):** 71.43% on the stress test, with no multi-mark detection. Using the fill-ratio class as a stand-in CNN dropped this to 36.17%, so that fallback was removed.
+- **Label semantics note:** In this dataset version every invalid answer is labelled `?` (43 true multiple marks plus 27 circles, ticks, crosses and faint marks on the stress forms); no `BD`-style labels exist. The "multi-mark" metrics therefore measure invalid-answer detection.
+

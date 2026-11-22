@@ -10,6 +10,9 @@ __pycache__/
 # Datasets and personal data (Strict rule: never commit roster.csv or raw data)
 roster.csv
 data/
+# Google Drive dataset downloads must live outside the repo (see scripts/setup_dataset.py)
+AI-for-Vision-Dataset*/
+AI-for-Vision-Dataset*.zip
 *.csv.bak
 
 # Model weights and checkpoints (preserve directory structure via .gitkeep)

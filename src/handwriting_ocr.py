@@ -122,8 +122,18 @@ class HandwritingOCR:
         """Lazy loader for EasyOCR reader."""
         if self._easyocr_reader is None:
             import easyocr
-            # EasyOCR GPU is CUDA only; on Mac use gpu=False
-            self._easyocr_reader = easyocr.Reader(["en"], gpu=False)
+            # EasyOCR GPU is CUDA only; on Mac use gpu=False.
+            # Keep model weights inside the project (git-ignored models/) instead of
+            # ~/.EasyOCR so sandboxed or offline runners can use a pre-seeded cache.
+            model_dir = Path(config.OCR_CONFIG["easyocr_model_dir"])
+            model_dir.mkdir(parents=True, exist_ok=True)
+            self._easyocr_reader = easyocr.Reader(
+                ["en"],
+                gpu=False,
+                model_storage_directory=str(model_dir),
+                user_network_directory=str(model_dir / "user_network"),
+                download_enabled=not config.OCR_CONFIG["offline"],
+            )
         return self._easyocr_reader
 
     def _enhance_crop(self, crop_bgr: np.ndarray) -> np.ndarray:
@@ -556,7 +566,9 @@ class HandwritingOCR:
     def cross_check_roster(self, extracted_student_id: str, contributor: str = "") -> List[str]:
         """Cross-check extracted student number or contributor against roster.csv locally."""
         flags = []
-        if contributor:
+        # Only check contributors when the local roster was actually loaded;
+        # an absent roster must not produce a false NOT_FOUND flag.
+        if contributor and self.roster_splits:
             if contributor not in self.roster_splits:
                 flags.append("ROSTER_CONTRIBUTOR_NOT_FOUND")
 

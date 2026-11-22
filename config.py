@@ -76,6 +76,10 @@ TRAIN_CONFIG = {
 OCR_CONFIG = {
     "trocr_model": "microsoft/trocr-base-handwritten",
     "model_cache_dir": MODELS_DIR / "ocr_cache",
+    # EasyOCR detector/recognizer weights (pre-seed this folder for offline runners)
+    "easyocr_model_dir": MODELS_DIR / "ocr_cache" / "easyocr",
+    # Set OMR_OFFLINE=1 to forbid model downloads once weights are cached
+    "offline": os.getenv("OMR_OFFLINE", "0") == "1",
     "roll_digits": 8,  # Student number digit count
 }
 

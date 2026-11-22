@@ -67,6 +67,8 @@ def test_field_validation(ocr_engine):
 
 def test_roster_cross_check(ocr_engine):
     """Test roster cross-checking without student name disclosure."""
+    if not ocr_engine.roster_splits:
+        pytest.skip("roster.csv not available locally (it is never committed)")
     # Valid contributor in roster
     flags = ocr_engine.cross_check_roster("74228162", contributor="p01")
     assert "ROSTER_CONTRIBUTOR_NOT_FOUND" not in flags
@@ -74,3 +76,12 @@ def test_roster_cross_check(ocr_engine):
     # Non-existent contributor
     flags = ocr_engine.cross_check_roster("74228162", contributor="p999")
     assert "ROSTER_CONTRIBUTOR_NOT_FOUND" in flags
+
+
+def test_roster_absent_does_not_flag_contributor():
+    """Without a local roster, contributor checks must not raise false NOT_FOUND flags."""
+    engine = HandwritingOCR(use_trocr=False)
+    engine.roster_splits = {}
+    flags = engine.cross_check_roster("74228162", contributor="p01")
+    assert "ROSTER_CONTRIBUTOR_NOT_FOUND" not in flags
+    assert "STUDENT_NUMBER_LENGTH_MISMATCH" not in flags

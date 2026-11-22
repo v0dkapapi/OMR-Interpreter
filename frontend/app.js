@@ -304,6 +304,14 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       valElem.textContent = text;
+      valElem.removeAttribute("title");
+      if (fieldData && typeof fieldData === "object" && fieldData.is_valid === false) {
+        // Reading did not match the field's expected format: ask for a manual check
+        confElem.textContent = "Check";
+        confElem.className = "conf-badge conf-low";
+        valElem.title = "This reading does not match the expected format. Verify it against the sheet.";
+        return;
+      }
       const conf = Math.round(rawConf * 100);
       confElem.textContent = `${conf}%`;
       if (conf >= 80) {

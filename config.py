@@ -81,6 +81,15 @@ OCR_CONFIG = {
     # Set OMR_OFFLINE=1 to forbid model downloads once weights are cached
     "offline": os.getenv("OMR_OFFLINE", "0") == "1",
     "roll_digits": 8,  # Student number digit count
+    # Subject prefixes of S3231 module codes (all 740 labelled forms use these).
+    # OCR'd prefixes are snapped to the nearest entry. Extend for other cohorts.
+    "module_prefixes": ["ACM", "BIOL", "BMGT", "CHEM", "COMP", "ECON", "EEEN", "MATH", "PHYC", "STAT"],
+    # Plausible exam years; dates outside this range are rejected as misreads
+    # (handwritten "2024" is often read as 2004/2014/2016). All labelled dates
+    # fall in 2019-2026; widen this for older or future cohorts.
+    "date_year_range": (2019, 2030),
+    # TrOCR beam search width; the n-best list is filtered by field validators.
+    "trocr_num_beams": 5,
 }
 
 # Scoring Policy Defaults

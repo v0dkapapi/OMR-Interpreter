@@ -86,8 +86,10 @@ flowchart TD
 
 ### 2.3 Phase 3: Handwritten Metadata OCR (`src/handwriting_ocr.py`)
 - **Metadata Fields:** Name, Student Number (written), Module Code, Seat Number, Examination Date.
-- **Dual Engine Execution:** Primary extraction uses TrOCR (`microsoft/trocr-base-handwritten`). If PyTorch MPS/CUDA memory is constrained or offline fallback is needed, EasyOCR runs as an offline fallback engine.
-- **Bubble Digit Read:** The 8-digit student number is read from the bubble grid and cross-checked against handwritten OCR text.
+- **Localization:** Each field has a search cell (`FIELD_CELLS`). Ink is detected against a local background estimate, printed label glyphs are erased (components wholly inside `LABEL_BOXES`), printed rules removed, and the handwriting cropped tightly; entries written over two lines are split and read line by line.
+- **Constrained n-best decoding:** TrOCR (`microsoft/trocr-base-handwritten`) decodes all field crops in one batch with 5 beams. A per-field token mask blocks tokens that cannot occur in the field (module code: uppercase and digits; date: digits, separators and month-name pieces; name: letters), which stops the language model rewriting codes into English words.
+- **Validated selection (`src/field_parsing.py`):** The first beam that parses as a valid value wins: names need two or three words without function words; module codes are a known subject prefix (`OCR_CONFIG["module_prefixes"]`, snapped by edit distance) plus 4-5 digits; dates are normalized to ISO `YYYY-MM-DD` from any common layout; seat numbers are an optional letter plus 1-4 digits. EasyOCR is the fallback reader. If nothing validates, the top reading is returned with `is_valid: false`, and the dashboard shows a "Check" badge.
+- **Written student number:** read from the 8 handwritten boxes (TrOCR, EasyOCR and per-cell digits). The bubble grid below the boxes is not yet decoded (see `docs/KNOWN_ISSUES_AND_ROADMAP.md`).
 - **Privacy Isolation:** Optional validation cross-checks student ID digits against `roster.csv` without ever logging, printing, or transmitting student names.
 
 ### 2.4 Phase 4: Deterministic Grader (`src/grader.py`)

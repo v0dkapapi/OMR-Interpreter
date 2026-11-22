@@ -52,6 +52,10 @@ This document catalogs identified technical limitations, architectural redundanc
 - **Issue:** Every invalid answer is labelled `?`; the `sloppy` column distinguishes `multiple` from `circle`, `tick`, `cross` and `faint`. "Multi-mark" metrics currently measure all invalid answers together.
 - **Remediation:** Parse the `sloppy` column in `evaluate.py` to report true multiple-mark precision and recall separately.
 
+### 1.10 Handwritten Field OCR (IMPROVED, Experiment 5)
+- **Status:** Held-out exact match: name 66.7%, module code 61.4%, date 54.4%, seat 52.6% (was 19-37%). Remaining errors are mostly single-character digit confusions, years misread as other plausible years, and very faint pencil.
+- **Next steps:** Fine-tune TrOCR on labelled header crops from the training split (labels exist for every form); decode the student-number bubble grid, which should be far more reliable than reading the written digits (15.8%).
+
 ### 1.9 Remaining Error Profile (Run 4)
 - `p19` (strong lighting gradients) is the weakest contributor at 88.44%, and errors still increase in question columns 3 and 4 (see 1.3). Column shadow equalization and sub-block alignment remain the most promising next steps.
 

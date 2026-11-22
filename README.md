@@ -202,7 +202,7 @@ The dashboard adheres strictly to the project UI guidelines:
 1. **Cropped Flatbed Scanner Margins:** Flatbed scanner software that auto-crops the paper edge can remove the outer fiducial markers (e.g. `p03-01-scan`), requiring SIFT feature matching over page content.
 2. **Faint / Partially Erased Pencil Marks:** Students marking with HB or 2H pencil produce marks with high reflectance under direct flash, resulting in subtle fill ratios ($\sim 0.28$) that challenge static thresholding.
 3. **Heavy Lighting Gradients / Cast Shadows:** Smartphone cameras held directly over the paper frequently cast dark hand/phone shadows across Question columns 3 and 4 (Questions 61–120), partially mitigated by morphological background division.
-4. **Cursive Student Metadata OCR:** TrOCR achieves high accuracy on clear block digits and letters, but freeform handwritten names that cross beyond field bounding boxes exhibit lower confidence.
+4. **Handwritten Field OCR:** Held-out exact match is about 67% for names, 61% for module codes, 54% for dates and 53% for seat numbers (Experiment 5). Readings that fail format validation are flagged with a "Check" badge. The written student number is still unreliable (about 16%). Benchmark with `python scripts/evaluate_ocr.py --forms 20 --kinds scan photo hard`.
 
 ---
 

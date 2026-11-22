@@ -100,3 +100,33 @@ This document records the experimental milestones, model iterations, validation 
 - **Fill-margin-only mode (no weights):** 71.43% on the stress test, with no multi-mark detection. Using the fill-ratio class as a stand-in CNN dropped this to 36.17%, so that fallback was removed.
 - **Label semantics note:** In this dataset version every invalid answer is labelled `?` (43 true multiple marks plus 27 circles, ticks, crosses and faint marks on the stress forms); no `BD`-style labels exist. The "multi-mark" metrics therefore measure invalid-answer detection.
 
+---
+
+## Experiment 5: Handwritten Field OCR (Name, Module Code, Date, Seat)
+
+- **Date:** November 22, 2026
+- **Benchmark:** `scripts/evaluate_ocr.py` on val/test forms (never `p03`, `p04`, `p19`), all three capture conditions. Exact match after light normalization (case and spacing for names, separators for codes and seats, ISO for dates). Only aggregate numbers are printed; names are never output.
+- **Root causes found:**
+  1. The `handwritten_rois` boxes sat over the printed labels and missed the handwriting: the module code box ended above most writing, and the name box cut letters in half.
+  2. Students write in different places (beside the label, high in the cell, over two lines), so any fixed box clips some sheets.
+  3. TrOCR's English language model rewrites codes and dates into words ("ECON12964" read as "economology", dates as "management").
+  4. Dates were output as "20 October 2025" while labels and downstream use expect ISO `YYYY-MM-DD`.
+- **Changes:**
+  - Field boxes moved onto the handwriting bands measured from the mean ink map of 79 aligned training sheets.
+  - Per-sheet localization (`HandwritingOCR.locate_handwriting`): ink found in each field cell, printed label glyphs erased (only components wholly inside the label box), rules removed, tight crops, two-line entries split.
+  - TrOCR n-best (5 beams), batched across fields, with constrained decoding per field (module code: uppercase and digits; date: digits, separators and month-name pieces; name: letters). Seat is left unconstrained (constraining measured worse).
+  - Field validators in `src/field_parsing.py` pick the first valid reading: known subject prefixes (ACM, BIOL, BMGT, CHEM, COMP, ECON, EEEN, MATH, PHYC, STAT) with prefix snapping, letter/digit confusion repair, fuzzy month names, day-first numeric dates, slashes read as 1s, plausible years 2019-2030 with a last-resort year-digit repair. Dates output as ISO.
+  - Readings that fail validation are returned with `is_valid: false` and shown with a "Check" badge in the dashboard.
+- **Results (exact match, all conditions):**
+
+  | Field | Original (held-out forms 40-59) | New (held-out forms 40-59) | New (tuning forms 0-19) | New (check forms 20-39) |
+  |---|---|---|---|---|
+  | Name | 19.3% (CER 40.6%) | **66.7%** (CER 7.1%) | 70.9% | 78.3% |
+  | Module code | 21.1% (CER 43.3%) | **61.4%** (CER 9.7%) | 76.4% | 65.0% |
+  | Date | 36.8% (CER 25.4%) | **54.4%** (CER 18.8%) | 69.1% | 58.3% |
+  | Seat number | 29.8% (CER 46.2%) | **52.6%** (CER 22.5%) | 67.3% | 46.7% |
+  | Written student number | 15.8% | 15.8% (unchanged) | 7.3% | 6.7% |
+
+  Forms 0-19 were used for diagnosis and tuning, 20-39 for checking changes, and 40-59 were held out until the end. On forms 20-39 the original code scored name 21.7%, module 26.7%, date 33.3%, seat 30.0%.
+- **Speed:** about 3.5 s per sheet for all header fields on an M-series Mac (MPS).
+

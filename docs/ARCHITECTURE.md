@@ -109,4 +109,4 @@ Grading executes purely deterministic rules:
 - **UI Design System:**
   - Pure white background (`#FFFFFF`) with crimson red accent palette (`#7F1D1D`, `#B91C1C`, `#DC2626`).
   - Zero emojis across all interface copy, status badges, and notifications.
-  - Marked sheet overlay (`render_overlay` in `src/app.py`): a correct choice is filled green; a wrong choice is filled red and the correct answer green; multiple marks are red with the correct answer green (outer green ring if it was among the marks); for blank questions the correct answer is outlined in green. Fills are translucent so the student's marks stay visible. A colour key is shown under the preview.
+  - Marked sheet overlay (`render_overlay` in `src/app.py`): a correct choice is a filled green circle; a wrong choice is a filled red circle with the correct answer as a green outlined circle; for blank questions the correct answer is a green outlined circle; multiple marks are filled red with the correct answer outlined green (outer green ring if it was among the marks). Fills are translucent so the student's marks stay visible. A colour key is shown under the preview.

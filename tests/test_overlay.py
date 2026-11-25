@@ -51,9 +51,16 @@ def test_correct_answer_is_green(overlay, template):
     assert colour_at(overlay, center(template, 1, "A")) == "neutral"
 
 
-def test_wrong_answer_red_and_correct_answer_green(overlay, template):
+def ring_colour(overlay, template, q, opt):
+    cy, cx = center(template, q, opt)
+    roi = template["bubble_rois"][str(q)][opt]
+    return colour_at(overlay, (cy, cx + int(min(roi["w"], roi["h"]) / 2) + 2))
+
+
+def test_wrong_answer_red_filled_and_correct_answer_green_outline(overlay, template):
     assert colour_at(overlay, center(template, 2, "A")) == "red"
-    assert colour_at(overlay, center(template, 2, "C")) == "green"
+    assert colour_at(overlay, center(template, 2, "C")) == "neutral"   # not filled
+    assert ring_colour(overlay, template, 2, "C") == "green"           # outlined
     assert colour_at(overlay, center(template, 2, "B")) == "neutral"
 
 
@@ -62,7 +69,8 @@ def test_multi_mark_choices_red_and_key_green(overlay, template):
     assert colour_at(overlay, center(template, 3, "D")) == "red"   # invalid mark, outer green ring
     assert colour_at(overlay, center(template, 4, "B")) == "red"
     assert colour_at(overlay, center(template, 4, "E")) == "red"
-    assert colour_at(overlay, center(template, 4, "C")) == "green"
+    assert colour_at(overlay, center(template, 4, "C")) == "neutral"
+    assert ring_colour(overlay, template, 4, "C") == "green"
 
 
 def test_multi_mark_key_among_marks_gets_outer_green_ring(overlay, template):

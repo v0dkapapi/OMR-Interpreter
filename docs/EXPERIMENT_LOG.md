@@ -130,3 +130,24 @@ This document records the experimental milestones, model iterations, validation 
   Forms 0-19 were used for diagnosis and tuning, 20-39 for checking changes, and 40-59 were held out until the end. On forms 20-39 the original code scored name 21.7%, module 26.7%, date 33.3%, seat 30.0%.
 - **Speed:** about 3.5 s per sheet for all header fields on an M-series Mac (MPS).
 
+---
+
+## Experiment 6: Fine-Tuned TrOCR for Header Fields
+
+- **Date:** November 24-25, 2026
+- **Data:** `scripts/build_ocr_dataset.py` crops every header field with the inference code (`HandwritingOCR.field_image`): 6,233 training crops from 420 train-split forms (stress contributors excluded). Targets are the labels.csv values; dates use ISO `YYYY-MM-DD`, so the model outputs normalized dates directly.
+- **Training (`src/train_trocr.py`):** TrOCR-base-handwritten, image encoder and vocabulary embedding frozen, Adafactor, lr 5e-5, batch 8 x 2 accumulation, light augmentation, 8 epochs (about 12 minutes each on an M5). Full fine-tuning with AdamW needed 12 GB and swapped on a 16 GB Mac. Checkpoint chosen on dev forms (val/test forms 60-99); benchmark forms 0-59 unused.
+- **Dev exact match by epoch (mean):** 0: 20.5%, 1: 51.5%, 2: 58.1%, 3: 59.7%, 4: 66.9%, 6: 68.3%, 7: 70.5%, 8: 71.2% (best).
+- **Bugs fixed:** the constrained-decoding mask blocked the `<s>` token the decoder emits first, which collapsed name accuracy to 9% with the fine-tuned model; the mask also required the base processor to be loaded.
+- **Benchmark (full app pipeline, 60 held-out forms from contributors never seen in training, exact match):**
+
+  | Field | Experiment 5 (held-out 40-59) | Experiment 6 (all 60) | Experiment 6 (held-out 40-59) |
+  |---|---|---|---|
+  | Name | 66.7% | **97.1%** | 94.7% |
+  | Date | 54.4% | **84.3%** | 86.0% |
+  | Module code | 61.4% | **82.0%** | 73.7% |
+  | Seat number | 52.6% | **79.0%** | 68.4% |
+  | Written student number | 15.8% | **33.1%** | 47.4% |
+
+- **Next:** decode the student-number bubble grid; try training the encoder too (8 GB configuration); retrain the bubble classifier on more forms.
+

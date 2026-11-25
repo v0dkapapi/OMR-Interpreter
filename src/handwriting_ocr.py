@@ -93,6 +93,8 @@ def _allowed_token(field_name: str, token_text: str) -> bool:
         return False
     if field_name == "name":
         return bool(re.fullmatch(r"[A-Za-z'\-]+", core))
+    if field_name == "student_number_written":
+        return core.isdigit()
     return True
 
 # Ink blocks at least this tall (canonical px) are checked for two touching lines.
@@ -143,6 +145,24 @@ class HandwritingOCR:
                             self.roster_splits[contributor] = split
         except (PermissionError, OSError) as e:
             logger.warning(f"Could not read roster.csv metadata: {e}")
+
+    def _init_finetuned(self) -> bool:
+        """Load the TrOCR model fine-tuned on S3231 headers, if it has been trained."""
+        if getattr(self, "_ft_available", None) is not None:
+            return self._ft_available
+        self._ft_available = False
+        ft_dir = Path(config.OCR_CONFIG.get("trocr_finetuned_dir", ""))
+        if not self.use_trocr or not (ft_dir / "config.json").exists():
+            return False
+        try:
+            from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+            self._ft_processor = TrOCRProcessor.from_pretrained(str(ft_dir))
+            self._ft_model = VisionEncoderDecoderModel.from_pretrained(str(ft_dir)).to(self.device).eval()
+            self._ft_available = True
+            logger.info("Fine-tuned TrOCR header model loaded.")
+        except Exception as e:
+            logger.warning(f"Fine-tuned TrOCR could not be loaded: {e}. Using the base model.")
+        return self._ft_available
 
     def _init_trocr(self) -> bool:
         """Attempt to load TrOCR model; return True if successful, False if offline/unavailable."""
@@ -471,7 +491,9 @@ class HandwritingOCR:
             self._token_masks: Dict[Tuple[Optional[str], int], torch.Tensor] = {}
         key = (field_name, vocab_size)
         if key not in self._token_masks:
-            tok = self._trocr_processor.tokenizer
+            # Base and fine-tuned models share one vocabulary; use whichever is loaded
+            processor = self._trocr_processor or getattr(self, "_ft_processor", None)
+            tok = processor.tokenizer
             if field_name is None:
                 mask = torch.ones(vocab_size, dtype=torch.bool)
             else:
@@ -480,12 +502,15 @@ class HandwritingOCR:
                 for i, piece in enumerate(pieces):
                     if piece is not None and _allowed_token(field_name, tok.convert_tokens_to_string([piece])):
                         mask[i] = True
+                # Always allow the special start/end tokens: the decoder emits <s>
+                # first (labels begin with it), and must be able to stop.
                 mask[tok.eos_token_id] = True
+                mask[tok.bos_token_id] = True
             self._token_masks[key] = mask
         return self._token_masks[key]
 
     def _trocr_nbest(
-        self, crops: List[np.ndarray], fields: Optional[List[Optional[str]]] = None
+        self, crops: List[np.ndarray], fields: Optional[List[Optional[str]]] = None, finetuned: bool = False
     ) -> List[List[Tuple[str, float]]]:
         """Decode all crops in one batch; return the n-best (text, confidence) per crop.
 
@@ -493,14 +518,17 @@ class HandwritingOCR:
         tokens valid for its field. Confidence is the exponentiated
         length-normalized beam log-probability.
         """
-        if not crops or not self._init_trocr():
+        ready = self._init_finetuned() if finetuned else self._init_trocr()
+        if not crops or not ready:
             return [[] for _ in crops]
+        model = self._ft_model if finetuned else self._trocr_model
+        processor = self._ft_processor if finetuned else self._trocr_processor
         from transformers import LogitsProcessor, LogitsProcessorList
 
         k = int(config.OCR_CONFIG.get("trocr_num_beams", 5))
         fields = fields or [None] * len(crops)
         images = [Image.fromarray(cv2.cvtColor(c, cv2.COLOR_BGR2RGB)) for c in crops]
-        pixel_values = self._trocr_processor(images, return_tensors="pt").pixel_values.to(self.device)
+        pixel_values = processor(images, return_tensors="pt").pixel_values.to(self.device)
         owner = self
 
         class FieldConstraint(LogitsProcessor):
@@ -512,7 +540,7 @@ class HandwritingOCR:
                 return scores.masked_fill(~self.row_mask[: scores.shape[0]], float("-inf"))
 
         with torch.no_grad():
-            out = self._trocr_model.generate(
+            out = model.generate(
                 pixel_values,
                 num_beams=k,
                 num_return_sequences=k,
@@ -522,7 +550,7 @@ class HandwritingOCR:
                 return_dict_in_generate=True,
                 logits_processor=LogitsProcessorList([FieldConstraint()]),
             )
-        texts = self._trocr_processor.batch_decode(out.sequences, skip_special_tokens=True)
+        texts = processor.batch_decode(out.sequences, skip_special_tokens=True)
         scores = out.sequences_scores.detach().cpu().numpy() if out.sequences_scores is not None else np.zeros(len(texts))
         results = []
         for i in range(len(crops)):
@@ -588,7 +616,37 @@ class HandwritingOCR:
         return "", 0.0, "none", False
 
     def read_fields(self, canonical_bgr: np.ndarray, field_names: List[str]) -> Dict[str, Tuple[str, float, str, bool]]:
-        """Locate and read several text fields, batching all TrOCR work into one call."""
+        """Locate and read several text fields.
+
+        With a fine-tuned header model, each field image is decoded by it first
+        (constrained n-best, first valid reading wins). Fields it cannot read
+        validly fall back to the base-model pipeline below.
+        """
+        results: Dict[str, Tuple[str, float, str, bool]] = {}
+        if self._init_finetuned():
+            images = {f: self.field_image(canonical_bgr, f) for f in field_names}
+            ready = [f for f in field_names if images[f] is not None]
+            try:
+                beams = self._trocr_nbest([images[f] for f in ready], fields=ready, finetuned=True)
+            except Exception as e:
+                logger.warning(f"Fine-tuned TrOCR decoding failed: {e}")
+                beams = [[] for _ in ready]
+            for f, field_beams in zip(ready, beams):
+                parser = PARSERS[f]
+                for text, conf in field_beams:
+                    value = parser(text)
+                    if value:
+                        results[f] = (value, conf, "trocr_ft", True)
+                        break
+            field_names = [f for f in field_names if f not in results]
+            if not field_names:
+                return results
+
+        results.update(self._read_fields_base(canonical_bgr, field_names))
+        return results
+
+    def _read_fields_base(self, canonical_bgr: np.ndarray, field_names: List[str]) -> Dict[str, Tuple[str, float, str, bool]]:
+        """Base-model pipeline: per-line constrained n-best, then EasyOCR."""
         lines_by_field: Dict[str, List[np.ndarray]] = {}
         for f in field_names:
             lines = self.locate_handwriting(canonical_bgr, f)
@@ -619,6 +677,25 @@ class HandwritingOCR:
         return results
 
     @staticmethod
+    def field_image(canonical_bgr: np.ndarray, field_name: str) -> Optional[np.ndarray]:
+        """Single image of a field's handwriting, as fed to the fine-tuned model.
+
+        Text fields: located lines laid side by side (fixed handwriting band if
+        no ink is found). Student number: the fixed box grid. Used identically
+        for training-crop extraction and inference.
+        """
+        if field_name == "student_number_written":
+            roi = CANONICAL_FIELD_ROIS[field_name]
+            crop = canonical_bgr[roi["y"]:roi["y"] + roi["h"], roi["x"]:roi["x"] + roi["w"]]
+            return crop if crop.size else None
+        lines = HandwritingOCR.locate_handwriting(canonical_bgr, field_name)
+        if not lines:
+            roi = CANONICAL_FIELD_ROIS[field_name]
+            band = canonical_bgr[roi["y"]:roi["y"] + roi["h"], roi["x"]:roi["x"] + roi["w"]]
+            return band if band.size else None
+        return HandwritingOCR._stack_lines(lines)
+
+    @staticmethod
     def _stack_lines(lines: List[np.ndarray]) -> Optional[np.ndarray]:
         """Lay line crops side by side so EasyOCR reads them as one text line."""
         if not lines:
@@ -628,7 +705,15 @@ class HandwritingOCR:
         return np.hstack(padded)
 
     def _read_student_number(self, crop_bgr: np.ndarray) -> Tuple[str, float, str]:
-        """Read the 8 written student number boxes (TrOCR, EasyOCR and per-cell)."""
+        """Read the 8 written student number boxes (fine-tuned TrOCR, then TrOCR, EasyOCR and per-cell)."""
+        if self._init_finetuned():
+            try:
+                for text, conf in self._trocr_nbest([crop_bgr], fields=["student_number_written"], finetuned=True)[0]:
+                    digits = re.sub(r"\D", "", text)
+                    if len(digits) == config.OCR_CONFIG["roll_digits"]:
+                        return digits, round(conf, 4), "trocr_ft"
+            except Exception as e:
+                logger.warning(f"Fine-tuned TrOCR failed for student number: {e}")
         candidates: List[Tuple[str, float, str]] = []
         cleaned_grid = self._suppress_grid_lines(crop_bgr)
 

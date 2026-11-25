@@ -333,7 +333,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const enginesUsed = new Set();
       Object.values(fields).forEach((f) => {
         if (f && f.engine && f.engine !== "none" && f.engine !== "failed") {
-          enginesUsed.add(f.engine === "trocr" ? "TrOCR" : (f.engine === "easyocr" ? "EasyOCR" : f.engine));
+          enginesUsed.add(f.engine === "trocr" ? "TrOCR" : (f.engine === "trocr_ft" ? "TrOCR (fine-tuned)" : (f.engine === "easyocr" ? "EasyOCR" : f.engine)));
         }
       });
       if (enginesUsed.size > 0) {

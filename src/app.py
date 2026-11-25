@@ -177,12 +177,12 @@ def render_overlay(
 ) -> np.ndarray:
     """Draw the marking overlay on the canonical sheet.
 
-    - Correct answer chosen: the chosen bubble is green.
-    - Wrong answer chosen: the chosen bubble is red and the correct answer green.
-    - Multiple marks: each chosen bubble is red; the correct answer is green
-      (an outer green ring if the student also marked it).
-    - Unanswered or under review: the correct answer gets a green outline only,
-      so it is not mistaken for a mark the student made.
+    1. Correct answer chosen: the chosen bubble is a filled green circle.
+    2. Wrong answer chosen: the chosen bubble is a filled red circle and the
+       correct answer a green outlined circle.
+    3. Nothing chosen: the correct answer is a green outlined circle.
+    Multiple marks follow rule 2: every chosen bubble is filled red and the
+    correct answer is outlined green (an outer green ring if it was among them).
     """
     bubble_rois = template.get("bubble_rois", {})
     fills = canonical_bgr.copy()
@@ -212,8 +212,7 @@ def render_overlay(
                 if opt == expected and status != QuestionStatus.CORRECT.value:
                     rings.append((center, r + 6, OVERLAY_GREEN, 3))
             elif opt == expected:
-                if status in (QuestionStatus.INCORRECT.value, QuestionStatus.MULTIPLE_MARK.value):
-                    cv2.circle(fills, center, r - 1, OVERLAY_GREEN, -1)
+                # Correct answer the student did not choose: outline only
                 rings.append((center, r + 2, OVERLAY_GREEN, 3))
             else:
                 rings.append((center, r, OVERLAY_FAINT, 1))

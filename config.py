@@ -90,6 +90,9 @@ OCR_CONFIG = {
     "date_year_range": (2019, 2030),
     # TrOCR beam search width; the n-best list is filtered by field validators.
     "trocr_num_beams": 5,
+    # TrOCR fine-tuned on S3231 header crops (src/train_trocr.py). Used first
+    # when present; the base model remains the fallback. Git-ignored.
+    "trocr_finetuned_dir": MODELS_DIR / "trocr_finetuned",
 }
 
 # Scoring Policy Defaults
